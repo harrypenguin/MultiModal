@@ -241,6 +241,7 @@ def generate_rest_indices(s: torch.Tensor, z: float,
 
     return rest_start_idx, rest_end_idx
 
+# Spectra smoothing utils from Biprateep
 def get_kernel(nsmooth: int) -> np.ndarray:
     """
     Generates a Gaussian kernel for smoothing.
