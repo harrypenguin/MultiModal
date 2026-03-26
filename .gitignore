@@ -1,0 +1,14 @@
+# Ignore everything by default
+*
+
+# Track Python files
+!*.py
+
+# Track Jupyter notebooks
+!*.ipynb
+
+# Track directories 
+!*/
+
+# Track gitignore itself
+!.gitignore
