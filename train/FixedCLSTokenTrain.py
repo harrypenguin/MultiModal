@@ -1,3 +1,5 @@
+# A more self-contained training file from before modularizing the code
+
 import os
 import sys
 import math
