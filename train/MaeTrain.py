@@ -95,6 +95,6 @@ if __name__ == "__main__":
         },
     )
 
-    ckpt_path = "/pscratch/sd/p/pzehao/DESIMAE/ImageMHP/epoch=050-val_loss=-1.7832.ckpt"
+    ckpt_path = "/pscratch/sd/p/pzehao/DESIMAE/ImageMHP/epoch=077-val_loss=-0.5690.ckpt"
     trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader, ckpt_path=ckpt_path)
     # trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)

@@ -1,1 +1,1 @@
-from .spec_loss import forward_loss
+from .SpecLoss import forward_loss

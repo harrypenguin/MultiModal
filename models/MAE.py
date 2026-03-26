@@ -585,6 +585,12 @@ class MaskedAutoencoderViT(pl.LightningModule):
         if batch is None:
             return None
 
+        self.chunk_size, self.mask_ratio = self.sample_patching()
+        _, mask_ratio_img = self.sample_patching()
+        if mask_ratio_img == self.mask_ratio and mask_ratio_img == 1:
+            mask_ratio_img = 0.9
+        self.mask_ratio_img = mask_ratio_img
+
         x, spec, weig, error, img, img_w, img_e, z, xy_pix = batch
         spec_loss, img_loss, total_loss, spec_pred, error_pred, pred_img, error_img, token_mask = self.forward(
             spec, weig, error, img, img_w, img_e, z, xy_pix

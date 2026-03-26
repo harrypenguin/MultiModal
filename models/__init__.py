@@ -1,1 +1,1 @@
-from .mae import MaskedAutoencoderViT
+from .MAE import MaskedAutoencoderViT
