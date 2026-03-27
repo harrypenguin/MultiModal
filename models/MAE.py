@@ -575,10 +575,10 @@ class MaskedAutoencoderViT(pl.LightningModule):
             print(f"Non-finite loss at step {batch_idx}; using zero loss")
             return zero_loss
 
-        self.log("train_loss", total_loss, on_step=True, on_epoch=True, prog_bar=True)
-        self.log("spec_loss", spec_loss, on_step=True, on_epoch=True, prog_bar=False)
-        self.log("img_loss", img_loss, on_step=True, on_epoch=True, prog_bar=False)
-        self.log("grad_norm", self._grad_norm(), on_step=True, on_epoch=True)
+        self.log("train_loss", total_loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log("spec_loss", spec_loss, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
+        self.log("img_loss", img_loss, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
+        self.log("grad_norm", self._grad_norm(), on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
         return total_loss
 
     def validation_step(self, batch, batch_idx):
@@ -596,9 +596,9 @@ class MaskedAutoencoderViT(pl.LightningModule):
             spec, weig, error, img, img_w, img_e, z, xy_pix
         )
 
-        self.log("val_loss", total_loss, on_step=True, on_epoch=True, prog_bar=True)
-        self.log("val_spec_loss", spec_loss, on_step=True, on_epoch=True, prog_bar=False)
-        self.log("val_img_loss", img_loss, on_step=True, on_epoch=True, prog_bar=False)
+        self.log("val_loss", total_loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log("val_spec_loss", spec_loss, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
+        self.log("val_img_loss", img_loss, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
 
         if batch_idx == 0:
             token_mask = token_mask.unsqueeze(0).expand(spec.size(0), -1)

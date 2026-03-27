@@ -27,7 +27,7 @@ if __name__ == "__main__":
     checkpoint_callback = ModelCheckpoint(
         save_top_k=-1,
         every_n_epochs=1,
-        dirpath=os.path.join(os.environ["SCRATCH"], "DESIMAE/ImageMHP"),
+        dirpath=os.path.join(os.environ["SCRATCH"], "DESIMAE/Final"),
         filename="{epoch:03d}-{val_loss:.4f}",
         monitor="val_loss",
         mode="min",
