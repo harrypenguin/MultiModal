@@ -61,12 +61,8 @@ class RedshiftFlow(nn.Module):
         pred_v = self.velocity(t, zt, context)
         return F.mse_loss(pred_v, target_v)
 
-    @torch.no_grad()
-    def sample(self, context, num_steps=50):
-        """Sample z by Euler-integrating the learned velocity field.
-
-        Note: this method is non-differentiable (used at inference).
-        For training with inferred z, use sample_differentiable instead.
+    def _integrate(self, context, num_steps):
+        """Euler-integrate the velocity field from noise to z.
 
         Args:
             context: (B, context_dim) conditioning features
@@ -82,12 +78,28 @@ class RedshiftFlow(nn.Module):
             z = z + self.velocity(t, z, context) * dt
         return z
 
+    @torch.no_grad()
+    def sample(self, context, num_steps=50):
+        """Sample z without gradient tracking (for inference).
+
+        Args:
+            context: (B, context_dim) conditioning features
+            num_steps: number of Euler integration steps
+
+        Returns:
+            (B,) sampled redshift values
+        """
+        return self._integrate(context, num_steps)
+
     def sample_differentiable(self, context, num_steps=50):
         """Sample z with gradient flow through the velocity field.
 
         Creates a computation graph through all Euler steps so that
         reconstruction loss can backpropagate through z_inferred to
         update the flow network parameters.
+
+        Note: 50 steps creates a sequential computation graph through
+        the flow MLP — monitor GPU memory during training.
 
         Args:
             context: (B, context_dim) conditioning features
@@ -96,9 +108,4 @@ class RedshiftFlow(nn.Module):
         Returns:
             (B,) sampled redshift values (with gradients)
         """
-        z = torch.randn(context.shape[0], device=context.device, dtype=context.dtype)
-        dt = 1.0 / num_steps
-        for i in range(num_steps):
-            t = torch.full((context.shape[0],), i * dt, device=context.device, dtype=context.dtype)
-            z = z + self.velocity(t, z, context) * dt
-        return z
+        return self._integrate(context, num_steps)

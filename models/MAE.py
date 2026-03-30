@@ -12,7 +12,7 @@ from losses.SpecLoss import forward_loss
 from models.MyTimm import Block, generate_attn_mask, PatchEmbed1D
 from models.RedshiftFlow import RedshiftFlow
 from utils.DataProcessing import compute_rest_frame_wavelengths
-from utils.PositionalEmbedding import get_1d_sincos_pos_embed, get_2d_sincos_pos_embed, compute_sincos_pe
+from utils.PositionalEmbedding import get_2d_sincos_pos_embed, compute_sincos_pe
 from utils.Scheduler import CosineWarmupScheduler
 from utils.Visualization import visualize
 
@@ -136,7 +136,6 @@ class MaskedAutoencoderViT(pl.LightningModule):
         self.spec_mask_token = nn.Parameter(torch.zeros(1, 1, decoder_embed_dim))
         self.img_mask_token = nn.Parameter(torch.zeros(1, 1, decoder_embed_dim))
 
-        self.decoder_cls_pos_embed = nn.Parameter(torch.zeros(1, 1, decoder_embed_dim), requires_grad=False)
         self.decoder_embed_dim = decoder_embed_dim
 
         # --- decoder image positional embeddings (spatial + channel + modality) ---
@@ -458,8 +457,10 @@ class MaskedAutoencoderViT(pl.LightningModule):
         img_e = self.norm(img_e)
 
         # --- Redshift flow: infer z when masked ---
+        # Always execute flow when z_mask_prob > 0 to ensure consistent
+        # computation graph for DDP static_graph=True.
         flow_loss = None
-        if self.z_mask_prob > 0 and hasattr(self, 'redshift_flow'):
+        if self.z_mask_prob > 0:
             # Pool observed-frame features for flow conditioning
             spec_pool = s[:, 0, :]         # CLS token: (B, embed_dim)
             img_pool = img.mean(dim=1)     # Mean pool: (B, embed_dim)
@@ -474,11 +475,13 @@ class MaskedAutoencoderViT(pl.LightningModule):
             else:
                 flow_loss = self.redshift_flow.flow_matching_loss(flow_context, z)
 
-            # Infer z for masked samples (differentiable for reconstruction gradient)
+            # Infer z for masked samples only (differentiable for reconstruction gradient)
             if z_mask is not None and z_mask.any():
+                masked_idx = torch.where(z_mask)[0]
                 z_inferred = self.redshift_flow.sample_differentiable(
-                    flow_context, num_steps=self.z_flow_steps)
-                z_use = torch.where(z_mask, z_inferred, z)
+                    flow_context[masked_idx], num_steps=self.z_flow_steps)
+                z_use = z.clone()
+                z_use[masked_idx] = z_inferred
             else:
                 z_use = z
         else:
@@ -490,8 +493,8 @@ class MaskedAutoencoderViT(pl.LightningModule):
             num_patches, z_use, patch_size=self.patch_size)
         pe_start = compute_sincos_pe(lambda_start, self.embed_dim)  # (B, P, D)
         pe_end = compute_sincos_pe(lambda_end, self.embed_dim)      # (B, P, D)
-        s = torch.cat([s[:, :1, :], s[:, 1:, :] + pe_start + pe_end], dim=1)
-        e = torch.cat([e[:, :1, :], e[:, 1:, :] + pe_start + pe_end], dim=1)
+        s[:, 1:, :] = s[:, 1:, :] + pe_start + pe_end
+        e[:, 1:, :] = e[:, 1:, :] + pe_start + pe_end
 
         # --- Merge modalities and run merged blocks ---
         x = torch.cat([s, e], dim=-1)
