@@ -15,6 +15,7 @@ Multimodal Masked Autoencoder (MAE) for jointly modeling spectroscopic and imagi
 models/          # Neural network architectures
   MAE.py         # Main model — PyTorch Lightning MaskedAutoencoderViT
   MyTimm.py      # Transformer blocks (Attention, Block, PatchEmbed1D)
+  RedshiftFlow.py # Conditional flow matching for redshift inference
 losses/
   SpecLoss.py    # Spectral reconstruction losses (weighted MSE, gradients, FFT, spiky features)
 train/
@@ -22,7 +23,7 @@ train/
   FixedCLSTokenTrain.py  # Legacy monolithic training script (reference only)
 utils/
   DataProcessing.py      # Zarr dataset, DataLoader creation, preprocessing
-  PositionalEmbedding.py # 1D/2D sinusoidal positional encodings
+  PositionalEmbedding.py # 1D/2D sinusoidal positional encodings (incl. differentiable compute_sincos_pe)
   PatchEmbed.py          # 1D patch embedding layer
   AstroImageFunctions.py # Survey image → RGB conversion
   Visualization.py       # W&B reconstruction plot logging
@@ -59,10 +60,12 @@ Key hyperparameters (configured in `train/MaeTrain.py`):
 
 ## Architecture Notes
 
-- **Encoder**: Separate spectral (1D conv patches, size 31) and image (2D patches, 16×16) pathways merge via shared attention blocks. Redshift conditions the positional embeddings. Image channels are embedded in a single batched call (not per-channel loop).
-- **Decoder**: Separate prediction heads for flux, flux error, image, and image error. 2D conv refiners improve image output.
+- **Encoder**: Separate spectral (1D conv patches, size 31) and image (2D patches, 16x16) pathways. Modality-specific blocks process in observed frame, then rest-frame positional embeddings (computed via direct sinusoidal formula, differentiable through z) are applied before merged attention blocks. Image channels are embedded in a single batched call (not per-channel loop).
+- **Redshift Inference**: When `z_mask_prob > 0`, a conditional flow matching module (`RedshiftFlow`) infers missing redshifts from pooled observed-frame features (spec CLS + image mean). Uses optimal-transport CFM with Euler integration (50 steps). During training, z is stochastically masked; the flow learns from both direct supervision (flow matching loss on known-z samples) and indirect signal (reconstruction loss backpropagates through differentiable PE to flow params). Loss balancing via learned homoscedastic task weights (Kendall et al. 2018).
+- **Positional Embeddings**: Rest-frame spectral PE uses `compute_sincos_pe()` — an analytic sinusoidal function computed directly at continuous wavelengths (no lookup table). This is fully differentiable through z: `PE(lambda_rest) = [sin(lambda_rest * omega), cos(lambda_rest * omega)]` where `lambda_rest = lambda_obs / (1+z)`. Image PE uses pre-computed 2D sinusoidal + channel embeddings cached as buffers.
+- **Decoder**: Separate prediction heads for flux, flux error, image, and image error. 2D conv refiners improve image output. Uses same direct sinusoidal PE as encoder for rest-frame spectral tokens.
 - **Masking**: CLS token (position 0) is always protected from masking via `has_cls=True` in `generate_attn_mask`. Validation uses fixed masking (`val_patch_size`, `val_mask_ratio`) for deterministic metrics.
-- **Losses** (`SpecLoss.py`): Weighted MSE with inverse variance, gradient/curvature penalties, top-k hard-example mining, FFT high-frequency loss, asymmetric under-prediction penalty, and spiky-feature emphasis. All weights configurable. Weight sanitization via shared `_sanitize_weights`/`_sanitize_log_scale` helpers.
+- **Losses** (`SpecLoss.py`): Heteroscedastic Gaussian NLL with inverse variance weighting, gradient/curvature penalties, top-k hard-example mining, FFT high-frequency loss, asymmetric under-prediction penalty, spiky-feature emphasis, and sigma regularization on masked patches (both spectral and image). All weights configurable. Weight sanitization via shared `_sanitize_weights`/`_sanitize_log_scale` helpers. Multi-task loss balancing via learned `log_var_spec`, `log_var_img`, `log_var_z` parameters.
 - **Efficiency**: Mixed precision training (`precision="16-mixed"`), optional gradient checkpointing (`gradient_checkpointing=True`), flash attention enabled by default, `drop_last=True` on training DataLoader. Single dataset instance shared between train/val splits; augmentation applied via `AugmentedSubset` wrapper on training split only. Image positional embeddings (spatial + channel) are pre-computed and cached as buffers. DDP uses `static_graph=True` with `find_unused_parameters=False`.
 
 ## No Tests / Linting / CI
