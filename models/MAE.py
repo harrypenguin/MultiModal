@@ -250,11 +250,6 @@ class MaskedAutoencoderViT(pl.LightningModule):
             nn.Linear(decoder_embed_dim, decoder_embed_dim),
         )
 
-        self.img_spatial_pos_embed = get_2d_sincos_pos_embed(self.hparams.embed_dim, img_grid_size, img_grid_size)
-        self.decoder_img_spatial_pos_embed = get_2d_sincos_pos_embed(
-            self.hparams.decoder_embed_dim, img_grid_size, img_grid_size
-        )
-
         self.initialize_weights()
 
     def initialize_weights(self):
