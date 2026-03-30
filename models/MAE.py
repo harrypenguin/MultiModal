@@ -5,6 +5,7 @@ import numpy as np
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint as grad_checkpoint
 from timm.models.vision_transformer import PatchEmbed
 
 from losses.SpecLoss import forward_loss
@@ -45,6 +46,7 @@ class MaskedAutoencoderViT(pl.LightningModule):
         patch_scheme={"patch_sizes": [1], "mask_ratios": [0.75]},
         val_patch_size=16,
         val_mask_ratio=0.5,
+        gradient_checkpointing=False,
         scatter_term=1,
         log_regularizer=1.0,
         lam_grad=0.0,
@@ -377,6 +379,33 @@ class MaskedAutoencoderViT(pl.LightningModule):
         img = refiner(img)
         return self._image_to_img_tokens(img)
 
+    def _run_block(self, blk, x, *args):
+        """Run a transformer block with optional gradient checkpointing."""
+        if self.hparams.gradient_checkpointing and self.training:
+            return grad_checkpoint(blk, x, *args, use_reentrant=False)
+        return blk(x, *args)
+
+    def _embed_image_channels(self, img, coord_emb):
+        """Embed all image channels in a single batched forward pass.
+
+        Instead of looping over C channels with C separate patch_embedimg
+        calls (each launching its own CUDA kernel), we reshape so all
+        channels are processed in one call, then reshape back.
+
+        img:       (B, C, H, W)
+        coord_emb: (B, num_spatial, embed_dim)
+        returns:   (B, C * num_spatial, embed_dim)
+        """
+        B, C, H, W = img.shape
+        # Treat each channel as a separate batch element: (B*C, 1, H, W)
+        tokens = self.patch_embedimg(img.reshape(B * C, 1, H, W))
+        # tokens: (B*C, num_spatial, embed_dim) → (B, C, num_spatial, embed_dim)
+        tokens = tokens.reshape(B, C, -1, tokens.shape[-1])
+        # Add coordinate embedding (broadcast over channels)
+        tokens = tokens + coord_emb.unsqueeze(1)
+        # Flatten channel and spatial dims: (B, C * num_spatial, embed_dim)
+        return tokens.reshape(B, -1, tokens.shape[-1])
+
     def forward_encoder(self, s, e, img, img_e, z, xy_pix, mask_ratio, chunk_size):
         s = self.patch_embed1d(s.unsqueeze(-1))
         e = self.patch_embed1d(e.unsqueeze(-1))
@@ -393,8 +422,8 @@ class MaskedAutoencoderViT(pl.LightningModule):
 
         rel_coords = self._build_relative_patch_coords(xy_pix, dtype=img.dtype, device=img.device)
         coord_emb = self.coord_mlp(rel_coords)
-        img = torch.cat([self.patch_embedimg(img[:, i:i + 1]) + coord_emb for i in range(img.size(1))], dim=1)
-        img_e = torch.cat([self.patch_embedimg(img_e[:, i:i + 1]) + coord_emb for i in range(img_e.size(1))], dim=1)
+        img = self._embed_image_channels(img, coord_emb)
+        img_e = self._embed_image_channels(img_e, coord_emb)
 
         img_pos_embed = self.get_image_pos_embed(dtype=img.dtype, device=img.device)
         img = img + img_pos_embed + self.img_modality_embed.to(dtype=img.dtype)
@@ -416,19 +445,19 @@ class MaskedAutoencoderViT(pl.LightningModule):
         e = torch.cat((cls_tokens, e), dim=1)
 
         for blk in self.s_attn:
-            s = blk(s, attn_mask, token_mask)
+            s = self._run_block(blk, s, attn_mask, token_mask)
         s = self.norm(s)
 
         for blk in self.e_attn:
-            e = blk(e, attn_mask, token_mask)
+            e = self._run_block(blk, e, attn_mask, token_mask)
         e = self.norm(e)
 
         for blk in self.img_attn:
-            img = blk(img, attn_mask_img, token_mask_img)
+            img = self._run_block(blk, img, attn_mask_img, token_mask_img)
         img = self.norm(img)
 
         for blk in self.img_e_attn:
-            img_e = blk(img_e, attn_mask_img, token_mask_img)
+            img_e = self._run_block(blk, img_e, attn_mask_img, token_mask_img)
         img_e = self.norm(img_e)
 
         x = torch.cat([s, e], dim=-1)
@@ -439,7 +468,7 @@ class MaskedAutoencoderViT(pl.LightningModule):
         overall_token_mask = torch.cat([token_mask, token_mask_img], dim=0)
 
         for blk in self.merged_blocks:
-            x = blk(x, overall_attn_mask, overall_token_mask)
+            x = self._run_block(blk, x, overall_attn_mask, overall_token_mask)
         x = self.merged_norm(x)
 
         return x, overall_attn_mask, overall_token_mask, deredshifted_start_indices, deredshifted_end_indices
@@ -498,7 +527,7 @@ class MaskedAutoencoderViT(pl.LightningModule):
         x = torch.cat([x[:, :1, :], x_spec, x_img], dim=1)
 
         for blk in self.decoder_blocks:
-            x = blk(x)
+            x = self._run_block(blk, x)
         x = self.decoder_norm(x)
 
         s = self.decoder_pred(x[:, :-self.num_patchesimg, :])
