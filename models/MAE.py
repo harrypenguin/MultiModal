@@ -233,6 +233,12 @@ class MaskedAutoencoderViT(pl.LightningModule):
         self.lam_img_sigma_masked = lam_img_sigma_masked
         self.lam_spec_sigma_masked = lam_spec_sigma_masked
 
+        # Learned task weights for multi-task loss balancing (Kendall et al. 2018).
+        # exp(-log_var) acts as precision; +log_var prevents weights from collapsing.
+        self.log_var_spec = nn.Parameter(torch.zeros(1))
+        self.log_var_img = nn.Parameter(torch.zeros(1))
+        self.log_var_z = nn.Parameter(torch.zeros(1))
+
         # extras
 
         self.coord_mlp = nn.Sequential(
@@ -536,7 +542,7 @@ class MaskedAutoencoderViT(pl.LightningModule):
         pred, error, pred_img, error_img = self.forward_decoder(latent, token_mask, z, xy_pix)
 
         offset = self.left_patches * self.patch_size
-        spec_loss, img_loss, total_loss = forward_loss(
+        spec_loss, img_loss, _ = forward_loss(
             pred[:, offset:offset + self.spec_dim],
             spec,
             weig,
@@ -567,6 +573,13 @@ class MaskedAutoencoderViT(pl.LightningModule):
             lam_img_sigma_masked=self.lam_img_sigma_masked,
             lam_spec_sigma_masked=self.lam_spec_sigma_masked,
         )
+
+        # Learned task weights (Kendall et al. 2018)
+        precision_spec = torch.exp(-self.log_var_spec)
+        precision_img = torch.exp(-self.log_var_img)
+        total_loss = (precision_spec * spec_loss + self.log_var_spec
+                      + precision_img * img_loss + self.log_var_img)
+
         return spec_loss, img_loss, total_loss, pred, error, pred_img, error_img, token_mask
 
     def training_step(self, batch, batch_idx):
@@ -595,6 +608,8 @@ class MaskedAutoencoderViT(pl.LightningModule):
         self.log("train_loss", total_loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
         self.log("spec_loss", spec_loss, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
         self.log("img_loss", img_loss, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
+        self.log("task_weight_spec", torch.exp(-self.log_var_spec).item(), on_step=True, on_epoch=False, sync_dist=True)
+        self.log("task_weight_img", torch.exp(-self.log_var_img).item(), on_step=True, on_epoch=False, sync_dist=True)
         self.log("grad_norm", self._grad_norm(), on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
         return total_loss
 
