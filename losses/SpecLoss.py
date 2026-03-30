@@ -145,11 +145,6 @@ def forward_loss(
     sigma_hat_sq = weight * torch.exp(log_s).clamp(min=eps).pow(2)
     denom = (1.0 / w_safe + sigma_hat_sq).clamp(min=eps)
 
-    if torch.any(torch.isnan(denom)):
-        print("NaNs detected in denominator")
-    if torch.any(denom <= 0):
-        print(f"Non-positive denominator. Min: {denom.min().item()}")
-
     sq_error = (x_hat - x).pow(2)
     base_pixel = 0.5 * (sq_error / denom + regularizer * torch.log(denom.clamp_min(eps)))
     loss = base_pixel.mean()

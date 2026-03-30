@@ -1,5 +1,5 @@
 import numpy as np
-from torch.utils.data import TensorDataset, DataLoader, Dataset, random_split, Subset
+from torch.utils.data import DataLoader, Dataset, Subset
 from scipy.ndimage import convolve1d
 import pandas
 import torch
@@ -128,7 +128,7 @@ class MultimodalDataset(Dataset):
             spec_tensor = torch.from_numpy(spectra)
             return (
                 spec_tensor,
-                spec_tensor.clone(),
+                spec_tensor,
                 torch.from_numpy(ivar),
                 torch.from_numpy(error),
                 torch.from_numpy(img),
@@ -145,6 +145,58 @@ class MultimodalDataset(Dataset):
     def __len__(self):
         return self.end - self.start
 
+class AugmentedSubset(Dataset):
+    """Wraps a Subset to apply image-shift augmentation on the fly.
+
+    This exists so that a single MultimodalDataset (with augment=False) can be
+    shared between training and validation splits.  Only the training split is
+    wrapped with this class, which re-applies the shift augmentation that was
+    previously baked into the dataset itself.
+    """
+
+    def __init__(self, subset, max_shift=50):
+        self.subset = subset
+        self.max_shift = max_shift
+
+    def __len__(self):
+        return len(self.subset)
+
+    @staticmethod
+    def _shift_image(arr, dx, dy):
+        out = np.roll(arr, shift=dy, axis=-2)
+        out = np.roll(out, shift=dx, axis=-1)
+        return out
+
+    def __getitem__(self, idx):
+        item = self.subset[idx]
+        if item is None or self.max_shift <= 0:
+            return item
+
+        # Unpack the tuple returned by MultimodalDataset.__getitem__
+        spec, spec2, ivar, error, img, img_ivar, img_error, z, xy_pix = item
+
+        dx = np.random.randint(-self.max_shift, self.max_shift + 1)
+        dy = np.random.randint(-self.max_shift, self.max_shift + 1)
+
+        img_np = img.numpy()
+        img_ivar_np = img_ivar.numpy()
+        img_error_np = img_error.numpy()
+
+        img_np = self._shift_image(img_np, dx, dy)
+        img_ivar_np = self._shift_image(img_ivar_np, dx, dy)
+        img_error_np = self._shift_image(img_error_np, dx, dy)
+
+        xy_pix = xy_pix + torch.tensor([dx, -dy], dtype=torch.float32)
+
+        return (
+            spec, spec2, ivar, error,
+            torch.from_numpy(img_np.copy()),
+            torch.from_numpy(img_ivar_np.copy()),
+            torch.from_numpy(img_error_np.copy()),
+            z, xy_pix,
+        )
+
+
 def CreateMultimodalDataLoadersIter(
     path='/pscratch/sd/p/pzehao/iron/desi_maglim_19_5.zarr',
     end=1000000,
@@ -153,22 +205,26 @@ def CreateMultimodalDataLoadersIter(
     augment_train=True,
     max_shift=50,
 ):
-    train_base = MultimodalDataset(path, start=0, end=end, augment=augment_train, max_shift=max_shift)
-    val_base   = MultimodalDataset(path, start=0, end=end, augment=False, max_shift=0)
+    # Single dataset instance — zarr + parquet loaded only once
+    base = MultimodalDataset(path, start=0, end=end, augment=False, max_shift=0)
 
-    total_size = len(train_base)
+    total_size = len(base)
     if train_size > total_size:
         raise ValueError(f"train_size ({train_size}) exceeds dataset size ({total_size})")
-
-    val_size = total_size - train_size
 
     g = torch.Generator().manual_seed(130)
     perm = torch.randperm(total_size, generator=g).tolist()
     train_idx = perm[:train_size]
     val_idx = perm[train_size:]
 
-    train_dataset = Subset(train_base, train_idx)
-    val_dataset   = Subset(val_base, val_idx)
+    train_subset = Subset(base, train_idx)
+    val_dataset = Subset(base, val_idx)
+
+    # Wrap training subset with augmentation if requested
+    if augment_train:
+        train_dataset = AugmentedSubset(train_subset, max_shift=max_shift)
+    else:
+        train_dataset = train_subset
 
     num_workers = 7
     loader_kwargs = dict(
