@@ -304,25 +304,27 @@ class MaskedAutoencoderViT(pl.LightningModule):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
-    def get_image_pos_embed(self, dtype, device):
-        spatial = self.img_spatial_pos_embed.to(device=device, dtype=dtype)
+    def _get_image_pos_embed(self, spatial_embed, channel_embed, dtype, device):
+        """Combine spatial and channel embeddings for image patches.
+
+        Used by both encoder and decoder — the only difference is which
+        buffers are passed in.
+        """
+        spatial = spatial_embed.to(device=device, dtype=dtype)
         spatial = spatial.expand(self.num_img_channels, -1, -1)
 
-        channel = self.img_channel_embed.to(device=device, dtype=dtype)
+        channel = channel_embed.to(device=device, dtype=dtype)
         channel = channel.unsqueeze(1).expand(-1, self.num_img_spatial, -1)
 
-        img_pos = (spatial + channel).reshape(1, self.num_img_channels * self.num_img_spatial, -1)
-        return img_pos
+        return (spatial + channel).reshape(1, self.num_img_channels * self.num_img_spatial, -1)
+
+    def get_image_pos_embed(self, dtype, device):
+        return self._get_image_pos_embed(
+            self.img_spatial_pos_embed, self.img_channel_embed, dtype, device)
 
     def get_decoder_image_pos_embed(self, dtype, device):
-        spatial = self.decoder_img_spatial_pos_embed.to(device=device, dtype=dtype)
-        spatial = spatial.expand(self.num_img_channels, -1, -1)
-
-        channel = self.decoder_img_channel_embed.to(device=device, dtype=dtype)
-        channel = channel.unsqueeze(1).expand(-1, self.num_img_spatial, -1)
-
-        img_pos = (spatial + channel).reshape(1, self.num_img_channels * self.num_img_spatial, -1)
-        return img_pos
+        return self._get_image_pos_embed(
+            self.decoder_img_spatial_pos_embed, self.decoder_img_channel_embed, dtype, device)
 
     def _continuous_2d_sincos(self, xy_patch_units, embed_dim, dtype, device):
         # Used to generate PEs for spectrum based on fibre location, to match image sin cos PE
@@ -410,9 +412,9 @@ class MaskedAutoencoderViT(pl.LightningModule):
         s = self.patch_embed1d(s.unsqueeze(-1))
         e = self.patch_embed1d(e.unsqueeze(-1))
 
-        # I'm going to hardcode 128 size assumption here for now
-        xy_grid_x = (xy_pix[:, 0] + 64.0) / self.img_patch
-        xy_grid_y = (64.0 - xy_pix[:, 1]) / self.img_patch
+        img_center = self.patch_embedimg.img_size[0] / 2.0
+        xy_grid_x = (xy_pix[:, 0] + img_center) / self.img_patch
+        xy_grid_y = (img_center - xy_pix[:, 1]) / self.img_patch
         xy_grid = torch.stack([xy_grid_x, xy_grid_y], dim=-1)
 
         xy_pe = self._continuous_2d_sincos(xy_grid, self.hparams.embed_dim, s.dtype, s.device).unsqueeze(1)
@@ -513,8 +515,9 @@ class MaskedAutoencoderViT(pl.LightningModule):
         pe_start = pos_table[deredshifted_start_indices]
         pe_end = pos_table[deredshifted_end_indices]
         x_spec = x_spec + pe_start[:, 1:, :] + pe_end[:, 1:, :]
-        xy_grid_x = (xy_pix[:, 0] + 64.0) / self.img_patch
-        xy_grid_y = (64.0 - xy_pix[:, 1]) / self.img_patch
+        img_center = self.patch_embedimg.img_size[0] / 2.0
+        xy_grid_x = (xy_pix[:, 0] + img_center) / self.img_patch
+        xy_grid_y = (img_center - xy_pix[:, 1]) / self.img_patch
         xy_grid = torch.stack([xy_grid_x, xy_grid_y], dim=-1)
         xy_pe = self._continuous_2d_sincos(xy_grid, self.hparams.decoder_embed_dim, x.dtype, x.device).unsqueeze(1)
         x_spec = x_spec + xy_pe

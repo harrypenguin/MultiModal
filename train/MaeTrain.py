@@ -75,7 +75,12 @@ if __name__ == "__main__":
         gradient_clip_algorithm="norm",
     )
 
-    prob = 0.7 / 15
+    patch_sizes =  [1, 1, 2, 4, 8, 16, 32, 64, 128, 64, 32, 16, 8, 4, 2, 1]
+    mask_ratios =  [1, 0.9, 0.8, 0.75, 0.7, 0.65, 0.6, 0.55, 0.5, 0.45, 0.4, 0.35, 0.3, 0.2, 0.1, 0.0]
+    # First scheme (full masking) gets 30% probability; the rest share 70% equally
+    prob_first = 0.3
+    prob_rest = (1.0 - prob_first) / (len(patch_sizes) - 1)
+    probs = [prob_first] + [prob_rest] * (len(patch_sizes) - 1)
 
     model = MaskedAutoencoderViT(
         spec_dim=7781,
@@ -95,9 +100,9 @@ if __name__ == "__main__":
         decoder_num_heads=16,
         decoder_MLP_coefficient=1,
         patch_scheme={
-            "patch_sizes": [1, 1, 2, 4, 8, 16, 32, 64, 128, 64, 32, 16, 8, 4, 2, 1],
-            "mask_ratios": [1, 0.9, 0.8, 0.75, 0.7, 0.65, 0.6, 0.55, 0.5, 0.45, 0.4, 0.35, 0.3, 0.2, 0.1, 0.0],
-            "probs": [0.3, prob, prob, prob, prob, prob, prob, prob, prob, prob, prob, prob, prob, prob, prob, prob],
+            "patch_sizes": patch_sizes,
+            "mask_ratios": mask_ratios,
+            "probs": probs,
         },
     )
 
