@@ -9,6 +9,7 @@ import pytorch_lightning as pl
 from lightning.pytorch import seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.strategies import DDPStrategy
 
 from models.MAE import MaskedAutoencoderViT
 from utils.DataProcessing import CreateMultimodalDataLoadersIter
@@ -25,8 +26,8 @@ if __name__ == "__main__":
     lr_monitor = LearningRateMonitor(logging_interval="step")
 
     checkpoint_callback = ModelCheckpoint(
-        save_top_k=-1,
-        every_n_epochs=1,
+        save_top_k=5,
+        every_n_epochs=5,
         dirpath=os.path.join(os.environ["SCRATCH"], "DESIMAE/Final"),
         filename="{epoch:03d}-{val_loss:.4f}",
         monitor="val_loss",
@@ -68,10 +69,10 @@ if __name__ == "__main__":
         logger=logger,
         accelerator="gpu",
         devices="auto",
-        strategy="ddp",
+        strategy=DDPStrategy(find_unused_parameters=False, static_graph=True),
         num_nodes=4,
         precision="16-mixed",
-        gradient_clip_val=100.0,
+        gradient_clip_val=1.0,
         gradient_clip_algorithm="norm",
     )
 
