@@ -5,6 +5,18 @@ import pandas
 import torch
 import zarr
 
+def shift_image(arr, dx, dy):
+    """Circularly shift an image array along spatial axes.
+
+    arr: (C, H, W) or (H, W) numpy array.
+    dx:  shift in columns (positive = right).
+    dy:  shift in rows    (positive = down).
+    """
+    out = np.roll(arr, shift=dy, axis=-2)  # rows
+    out = np.roll(out, shift=dx, axis=-1)  # cols
+    return out
+
+
 def get_extreme_mask(spectra: np.ndarray, ivar: np.ndarray) -> np.ndarray:
     """
     Returns a boolean mask where:
@@ -21,7 +33,7 @@ def get_extreme_mask(spectra: np.ndarray, ivar: np.ndarray) -> np.ndarray:
 
 
 class MultimodalDataset(Dataset):
-    def __init__(self, path, start=0, end=None, augment=False, max_shift=50):
+    def __init__(self, path, start=0, end=None):
         self.data = zarr.open(path, mode='r')
         self.flux = self.data['FLUX']
         self.ivar = self.data['IVAR']
@@ -42,9 +54,6 @@ class MultimodalDataset(Dataset):
             raise ValueError(f"Invalid range: start={self.start}, end={self.end}, total={n_total}")
 
         sl = slice(self.start, self.end)
-
-        self.augment = augment
-        self.max_shift = max_shift
 
         self.redshift = p['Z'].iloc[sl].values.astype(np.float32)
         target_ra = p['TARGET_RA'].iloc[sl].values.astype(np.float32)
@@ -70,12 +79,6 @@ class MultimodalDataset(Dataset):
 
         self.dx_pix = (ra_to_x_sign * dx_arcsec / pix_scale_arcsec).astype(np.float32)
         self.dy_pix = (dec_to_y_sign * dy_arcsec / pix_scale_arcsec).astype(np.float32)
-
-    def _shift_image(self, arr, dx, dy):
-        # arr: (C, H, W)
-        out = np.roll(arr, shift=dy, axis=-2)  # rows
-        out = np.roll(out, shift=dx, axis=-1)  # cols
-        return out
 
     def __getitem__(self, idx):
         try:
@@ -115,16 +118,6 @@ class MultimodalDataset(Dataset):
             z = np.float32(self.redshift[local_idx])
             xy_pix = np.array([self.dx_pix[local_idx], self.dy_pix[local_idx]], dtype=np.float32)
 
-            if self.augment and self.max_shift > 0:
-                dx = np.random.randint(-self.max_shift, self.max_shift + 1)
-                dy = np.random.randint(-self.max_shift, self.max_shift + 1)
-
-                img = self._shift_image(img, dx, dy)
-                img_ivar = self._shift_image(img_ivar, dx, dy)
-                img_error = self._shift_image(img_error, dx, dy)
-
-                xy_pix = xy_pix + np.array([dx, -dy], dtype=np.float32)
-
             spec_tensor = torch.from_numpy(spectra)
             return (
                 spec_tensor,
@@ -148,10 +141,9 @@ class MultimodalDataset(Dataset):
 class AugmentedSubset(Dataset):
     """Wraps a Subset to apply image-shift augmentation on the fly.
 
-    This exists so that a single MultimodalDataset (with augment=False) can be
-    shared between training and validation splits.  Only the training split is
-    wrapped with this class, which re-applies the shift augmentation that was
-    previously baked into the dataset itself.
+    This exists so that a single MultimodalDataset can be shared between
+    training and validation splits.  Only the training split is wrapped
+    with this class, which applies random image shifts during __getitem__.
     """
 
     def __init__(self, subset, max_shift=50):
@@ -161,40 +153,23 @@ class AugmentedSubset(Dataset):
     def __len__(self):
         return len(self.subset)
 
-    @staticmethod
-    def _shift_image(arr, dx, dy):
-        out = np.roll(arr, shift=dy, axis=-2)
-        out = np.roll(out, shift=dx, axis=-1)
-        return out
-
     def __getitem__(self, idx):
         item = self.subset[idx]
         if item is None or self.max_shift <= 0:
             return item
 
-        # Unpack the tuple returned by MultimodalDataset.__getitem__
         spec, spec2, ivar, error, img, img_ivar, img_error, z, xy_pix = item
 
         dx = np.random.randint(-self.max_shift, self.max_shift + 1)
         dy = np.random.randint(-self.max_shift, self.max_shift + 1)
 
-        img_np = img.numpy()
-        img_ivar_np = img_ivar.numpy()
-        img_error_np = img_error.numpy()
-
-        img_np = self._shift_image(img_np, dx, dy)
-        img_ivar_np = self._shift_image(img_ivar_np, dx, dy)
-        img_error_np = self._shift_image(img_error_np, dx, dy)
-
+        # np.roll returns a new array, so no .copy() needed for from_numpy
+        img = torch.from_numpy(shift_image(img.numpy(), dx, dy))
+        img_ivar = torch.from_numpy(shift_image(img_ivar.numpy(), dx, dy))
+        img_error = torch.from_numpy(shift_image(img_error.numpy(), dx, dy))
         xy_pix = xy_pix + torch.tensor([dx, -dy], dtype=torch.float32)
 
-        return (
-            spec, spec2, ivar, error,
-            torch.from_numpy(img_np.copy()),
-            torch.from_numpy(img_ivar_np.copy()),
-            torch.from_numpy(img_error_np.copy()),
-            z, xy_pix,
-        )
+        return (spec, spec2, ivar, error, img, img_ivar, img_error, z, xy_pix)
 
 
 def CreateMultimodalDataLoadersIter(
@@ -206,7 +181,7 @@ def CreateMultimodalDataLoadersIter(
     max_shift=50,
 ):
     # Single dataset instance — zarr + parquet loaded only once
-    base = MultimodalDataset(path, start=0, end=end, augment=False, max_shift=0)
+    base = MultimodalDataset(path, start=0, end=end)
 
     total_size = len(base)
     if train_size > total_size:
