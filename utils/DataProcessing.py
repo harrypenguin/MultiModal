@@ -5,18 +5,6 @@ import pandas
 import torch
 import zarr
 
-def shift_image(arr, dx, dy):
-    """Circularly shift an image array along spatial axes.
-
-    arr: (C, H, W) or (H, W) numpy array.
-    dx:  shift in columns (positive = right).
-    dy:  shift in rows    (positive = down).
-    """
-    out = np.roll(arr, shift=dy, axis=-2)  # rows
-    out = np.roll(out, shift=dx, axis=-1)  # cols
-    return out
-
-
 def get_extreme_mask(spectra: np.ndarray, ivar: np.ndarray) -> np.ndarray:
     """
     Returns a boolean mask where:
