@@ -265,10 +265,8 @@ class MaskedAutoencoderViT(pl.LightningModule):
         torch.nn.init.normal_(self.spec_mask_token, std=0.02)
         torch.nn.init.normal_(self.img_mask_token, std=0.02)
 
-        # torch.nn.init.normal_(self.img_channel_embed.weight, std=.02)
         torch.nn.init.normal_(self.img_modality_embed, std=0.02)
         torch.nn.init.normal_(self.img_e_modality_embed, std=0.02)
-        # torch.nn.init.normal_(self.decoder_img_channel_embed.weight, std=.02)
         torch.nn.init.normal_(self.decoder_img_modality_embed, std=0.02)
 
         # initialize nn.Linear and nn.LayerNorm

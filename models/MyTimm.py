@@ -69,7 +69,6 @@ class Attention(nn.Module):
         self.norm = norm_layer(dim) if scale_norm else nn.Identity()
         self.proj = nn.Linear(dim, dim, bias=proj_bias)
         self.proj_drop = nn.Dropout(proj_drop)
-        self.attn = None
 
     def forward(
             self,
@@ -95,7 +94,6 @@ class Attention(nn.Module):
             attn = attn.softmax(dim=-1)
             attn = torch.nan_to_num(attn, nan=0.0)
             attn = self.attn_drop(attn)
-            self.attn = attn
             x = attn @ v
 
         x = x.transpose(1, 2).reshape(B, N, C)
