@@ -63,7 +63,7 @@ Key hyperparameters (configured in `train/MaeTrain.py`):
 - **Decoder**: Separate prediction heads for flux, flux error, image, and image error. 2D conv refiners improve image output.
 - **Masking**: CLS token (position 0) is always protected from masking via `has_cls=True` in `generate_attn_mask`. Validation uses fixed masking (`val_patch_size`, `val_mask_ratio`) for deterministic metrics.
 - **Losses** (`SpecLoss.py`): Weighted MSE with inverse variance, gradient/curvature penalties, top-k hard-example mining, FFT high-frequency loss, asymmetric under-prediction penalty, and spiky-feature emphasis. All weights configurable. Weight sanitization via shared `_sanitize_weights`/`_sanitize_log_scale` helpers.
-- **Efficiency**: Optional gradient checkpointing (`gradient_checkpointing=True`), flash attention enabled by default, `drop_last=True` on training DataLoader. Single dataset instance shared between train/val splits; augmentation applied via `AugmentedSubset` wrapper on training split only.
+- **Efficiency**: Mixed precision training (`precision="16-mixed"`), optional gradient checkpointing (`gradient_checkpointing=True`), flash attention enabled by default, `drop_last=True` on training DataLoader. Single dataset instance shared between train/val splits; augmentation applied via `AugmentedSubset` wrapper on training split only. Image positional embeddings (spatial + channel) are pre-computed and cached as buffers. DDP uses `static_graph=True` with `find_unused_parameters=False`.
 
 ## No Tests / Linting / CI
 
