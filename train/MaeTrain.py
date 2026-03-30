@@ -56,6 +56,12 @@ if __name__ == "__main__":
 
     torch.cuda.empty_cache()
     torch.set_float32_matmul_precision("medium")
+
+    # Enable flash/memory-efficient attention backends when available
+    # (no-op on hardware that doesn't support them)
+    if hasattr(torch.backends, "cuda"):
+        torch.backends.cuda.enable_flash_sdp(True)
+        torch.backends.cuda.enable_mem_efficient_sdp(True)
     trainer = pl.Trainer(
         callbacks=[checkpoint_callback, lr_monitor],
         max_epochs=600,

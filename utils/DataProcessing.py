@@ -209,12 +209,13 @@ def CreateMultimodalDataLoadersIter(
         persistent_workers=(num_workers > 0),
     )
     if num_workers > 0:
-        loader_kwargs["prefetch_factor"] = 2
+        loader_kwargs["prefetch_factor"] = 4
 
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
+        drop_last=True,
         **loader_kwargs,
     )
     val_loader = DataLoader(
