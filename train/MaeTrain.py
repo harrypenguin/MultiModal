@@ -89,6 +89,7 @@ if __name__ == "__main__":
         warmup_epoch=5,
         mask_ratio=0.75,
         lam_img_sigma_masked=0.1,
+        lam_spec_sigma_masked=0.1,
         embed_dim=256,
         merged_depth=4,
         merged_num_heads=8,

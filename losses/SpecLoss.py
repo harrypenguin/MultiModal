@@ -115,6 +115,7 @@ def forward_loss(
     lam_sigma_right=0.0,
     sigma_quantile=0.75,
     lam_img_sigma_masked=0.0,
+    lam_spec_sigma_masked=0.0,
 ):
     """
     mask: [B, P or P+1], 0=keep, 1=remove. If P+1, the first is CLS and is dropped.
@@ -216,6 +217,12 @@ def forward_loss(
         over = (sigma_hat - thr).clamp_min(0.0).pow(2)
         Lsig = mask_mean(over, pixel_mask)
         loss = loss + lam_sigma_right * Lsig
+
+    if lam_spec_sigma_masked > 0.0:
+        sigma_spec = torch.exp(log_s).clamp_min(eps)
+        denom_mask = pixel_mask.sum().clamp_min(1.0)
+        spec_sigma_penalty = (sigma_spec.pow(2) * pixel_mask).sum() / denom_mask
+        loss = loss + lam_spec_sigma_masked * spec_sigma_penalty
 
     B = img.size(0)
     P = img_patch

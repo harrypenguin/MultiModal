@@ -60,6 +60,7 @@ class MaskedAutoencoderViT(pl.LightningModule):
         lam_sigma_right=0.0,
         sigma_quantile=0.75,
         lam_img_sigma_masked=0.0,
+        lam_spec_sigma_masked=0.0,
         norm_layer=nn.LayerNorm,
         norm_pix_loss=False,
     ):
@@ -230,6 +231,7 @@ class MaskedAutoencoderViT(pl.LightningModule):
         self.lam_sigma_right = lam_sigma_right
         self.sigma_quantile = sigma_quantile
         self.lam_img_sigma_masked = lam_img_sigma_masked
+        self.lam_spec_sigma_masked = lam_spec_sigma_masked
 
         # extras
 
@@ -563,6 +565,7 @@ class MaskedAutoencoderViT(pl.LightningModule):
             lam_under=self.lam_under,
             lam_sigma_right=self.lam_sigma_right,
             lam_img_sigma_masked=self.lam_img_sigma_masked,
+            lam_spec_sigma_masked=self.lam_spec_sigma_masked,
         )
         return spec_loss, img_loss, total_loss, pred, error, pred_img, error_img, token_mask
 
