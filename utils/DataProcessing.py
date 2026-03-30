@@ -281,11 +281,14 @@ def compute_rest_frame_wavelengths(num_patches: int, z: torch.Tensor,
         lambda_end_rest: (B, num_patches) rest-frame end wavelengths
     """
     z = z.view(-1, 1)  # (B, 1)
+    # Guard against unstable inferred z (e.g. near -1) causing divide-by-zero.
+    z = torch.nan_to_num(z, nan=0.0, posinf=10.0, neginf=-0.95).clamp(min=-0.95, max=10.0)
     patch_idx = torch.arange(num_patches, device=z.device, dtype=z.dtype)  # (P,)
     lambda_start_obs = lambda_min_obs + patch_idx * patch_size * lambda_step_obs
     lambda_end_obs = lambda_start_obs + (patch_size - 1) * lambda_step_obs
-    lambda_start_rest = lambda_start_obs / (1 + z)  # (B, P)
-    lambda_end_rest = lambda_end_obs / (1 + z)
+    denom = (1 + z).clamp_min(1e-4)
+    lambda_start_rest = lambda_start_obs / denom  # (B, P)
+    lambda_end_rest = lambda_end_obs / denom
     return lambda_start_rest, lambda_end_rest
 
 

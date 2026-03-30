@@ -379,7 +379,6 @@ class MaskedAutoencoderViT(pl.LightningModule):
         img = refiner(img)
         return self._image_to_img_tokens(img)
 
-<<<<<<< claude/create-claude-md-Pmahx
     def _run_block(self, blk, x, *args):
         """Run a transformer block with optional gradient checkpointing."""
         if self.hparams.gradient_checkpointing and self.training:
@@ -407,8 +406,6 @@ class MaskedAutoencoderViT(pl.LightningModule):
         # Flatten channel and spatial dims: (B, C * num_spatial, embed_dim)
         return tokens.reshape(B, -1, tokens.shape[-1])
 
-    def forward_encoder(self, s, e, img, img_e, z, xy_pix, mask_ratio, chunk_size, z_mask=None):
-=======
     def _restore_masked_tokens(self, visible_tokens, keep_mask, mask_token):
         B = visible_tokens.shape[0]
         full_tokens = mask_token.to(dtype=visible_tokens.dtype, device=visible_tokens.device).repeat(
@@ -418,8 +415,7 @@ class MaskedAutoencoderViT(pl.LightningModule):
         full_tokens[:, keep_idx, :] = visible_tokens
         return full_tokens
 
-    def forward_encoder(self, s, e, img, img_e, z, xy_pix, mask_ratio, chunk_size):
->>>>>>> master
+    def forward_encoder(self, s, e, img, img_e, z, xy_pix, mask_ratio, chunk_size, z_mask=None):
         s = self.patch_embed1d(s.unsqueeze(-1))
         e = self.patch_embed1d(e.unsqueeze(-1))
 
@@ -444,10 +440,6 @@ class MaskedAutoencoderViT(pl.LightningModule):
         # Note: rest-frame PE is applied AFTER modality-specific blocks (below),
         # not here. This enables the flow to predict z from observed-frame features.
 
-<<<<<<< claude/create-claude-md-Pmahx
-        attn_mask, token_mask = generate_attn_mask(self.chunk_size, self.mask_ratio, self.num_patches1d + 1, device=s.device, has_cls=True)
-        attn_mask_img, token_mask_img = generate_attn_mask(1, self.mask_ratio_img, self.num_patchesimg, device=s.device)
-=======
         token_mask = generate_attn_mask(
             chunk_size,
             mask_ratio,
@@ -466,30 +458,13 @@ class MaskedAutoencoderViT(pl.LightningModule):
         # Keep CLS token always visible.
         token_mask = token_mask.clone()
         token_mask[0] = False
->>>>>>> master
 
         cls_token = self.cls_token + self.cls_pos_embed
         cls_tokens = cls_token.expand(s.shape[0], -1, -1)
         s = torch.cat((cls_tokens, s), dim=1)
         e = torch.cat((cls_tokens, e), dim=1)
 
-<<<<<<< claude/create-claude-md-Pmahx
-        # Modality-specific blocks (observed frame — no z needed)
-        for blk in self.s_attn:
-            s = self._run_block(blk, s, attn_mask, token_mask)
-        s = self.norm(s)
 
-        for blk in self.e_attn:
-            e = self._run_block(blk, e, attn_mask, token_mask)
-        e = self.norm(e)
-
-        for blk in self.img_attn:
-            img = self._run_block(blk, img, attn_mask_img, token_mask_img)
-        img = self.norm(img)
-
-        for blk in self.img_e_attn:
-            img_e = self._run_block(blk, img_e, attn_mask_img, token_mask_img)
-=======
         spec_keep = ~token_mask
         img_keep = ~token_mask_img
 
@@ -500,20 +475,19 @@ class MaskedAutoencoderViT(pl.LightningModule):
         img_e = img_e[:, img_keep, :]
 
         for blk in self.s_attn:
-            s = blk(s)
+            s = self._run_block(blk, s)
         s = self.norm(s)
 
         for blk in self.e_attn:
-            e = blk(e)
+            e = self._run_block(blk, e)
         e = self.norm(e)
 
         for blk in self.img_attn:
-            img = blk(img)
+            img = self._run_block(blk, img)
         img = self.norm(img)
 
         for blk in self.img_e_attn:
-            img_e = blk(img_e)
->>>>>>> master
+            img_e = self._run_block(blk, img_e)
         img_e = self.norm(img_e)
 
         # --- Redshift flow: infer z when masked ---
@@ -523,7 +497,11 @@ class MaskedAutoencoderViT(pl.LightningModule):
         if self.z_mask_prob > 0:
             # Pool observed-frame features for flow conditioning
             spec_pool = s[:, 0, :]         # CLS token: (B, embed_dim)
-            img_pool = img.mean(dim=1)     # Mean pool: (B, embed_dim)
+            if img.shape[1] > 0:
+                img_pool = img.mean(dim=1)     # Mean pool: (B, embed_dim)
+            else:
+                # If all image tokens are masked, avoid mean over empty dim -> NaN.
+                img_pool = torch.zeros_like(spec_pool)
             flow_context = torch.cat([spec_pool, img_pool], dim=-1)  # (B, 2*embed_dim)
 
             # Flow matching loss on known-z samples (direct supervision)
@@ -547,6 +525,9 @@ class MaskedAutoencoderViT(pl.LightningModule):
         else:
             z_use = z
 
+        # Keep z numerically safe for rest-frame wavelength conversion.
+        z_use = torch.nan_to_num(z_use, nan=0.0, posinf=10.0, neginf=-0.95).clamp(min=-0.95, max=10.0)
+
         # --- Apply rest-frame PE using direct sinusoidal computation ---
         num_patches = s.shape[1] - 1  # exclude CLS token
         lambda_start, lambda_end = compute_rest_frame_wavelengths(
@@ -564,17 +545,10 @@ class MaskedAutoencoderViT(pl.LightningModule):
         overall_token_mask = torch.cat([token_mask, token_mask_img], dim=0)
 
         for blk in self.merged_blocks:
-<<<<<<< claude/create-claude-md-Pmahx
-            x = self._run_block(blk, x, overall_attn_mask, overall_token_mask)
+            x = self._run_block(blk, x)
         x = self.merged_norm(x)
 
-        return x, overall_attn_mask, overall_token_mask, z_use, flow_loss
-=======
-            x = blk(x)
-        x = self.merged_norm(x)
-
-        return x, overall_token_mask
->>>>>>> master
+        return x, overall_token_mask, z_use, flow_loss
 
     def forward_decoder(self, x, token_mask, z, xy_pix):
         x = self.decoder_embed(x)
@@ -646,17 +620,11 @@ class MaskedAutoencoderViT(pl.LightningModule):
 
         return s, e, img, img_e
 
-<<<<<<< claude/create-claude-md-Pmahx
+
     def forward(self, spec, weig, error, img, weig_img, error_img, z, xy_pix, z_mask=None):
-        latent, _, token_mask, z_use, flow_loss = self.forward_encoder(
+        latent, token_mask, z_use, flow_loss = self.forward_encoder(
             spec, error, img, error_img, z, xy_pix, self.mask_ratio, self.chunk_size,
-            z_mask=z_mask,
-=======
-    def forward(self, spec, weig, error, img, weig_img, error_img, z, xy_pix):
-        latent, token_mask = self.forward_encoder(
-            spec, error, img, error_img, z, xy_pix, self.mask_ratio, self.chunk_size
->>>>>>> master
-        )
+            z_mask=z_mask)
         pred, error, pred_img, error_img = self.forward_decoder(latent, token_mask, z_use, xy_pix)
 
         offset = self.left_patches * self.patch_size
@@ -693,12 +661,12 @@ class MaskedAutoencoderViT(pl.LightningModule):
         )
 
         # Learned task weights (Kendall et al. 2018)
-        precision_spec = torch.exp(-self.log_var_spec)
-        precision_img = torch.exp(-self.log_var_img)
+        precision_spec = torch.exp((-self.log_var_spec).clamp(-10.0, 10.0))
+        precision_img = torch.exp((-self.log_var_img).clamp(-10.0, 10.0))
         total_loss = (precision_spec * spec_loss + self.log_var_spec
                       + precision_img * img_loss + self.log_var_img)
         if flow_loss is not None:
-            precision_z = torch.exp(-self.log_var_z)
+            precision_z = torch.exp((-self.log_var_z).clamp(-10.0, 10.0))
             total_loss = total_loss + precision_z * flow_loss + self.log_var_z
         elif self.z_mask_prob > 0:
             # Ensure log_var_z is always part of the loss graph when z masking is used,
@@ -716,7 +684,9 @@ class MaskedAutoencoderViT(pl.LightningModule):
 
         self.chunk_size, self.mask_ratio = self.sample_patching()
         _, mask_ratio_img = self.sample_patching()
-        if mask_ratio_img == self.mask_ratio and mask_ratio_img == 1:
+        if mask_ratio_img >= 1.0:
+            mask_ratio_img = 0.9
+        elif mask_ratio_img == self.mask_ratio and mask_ratio_img == 1:
             mask_ratio_img = 0.9
         self.mask_ratio_img = mask_ratio_img
         self.log("chunk_size", self.chunk_size)
@@ -740,11 +710,11 @@ class MaskedAutoencoderViT(pl.LightningModule):
         self.log("train_loss", total_loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
         self.log("spec_loss", spec_loss, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
         self.log("img_loss", img_loss, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
-        self.log("task_weight_spec", torch.exp(-self.log_var_spec).item(), on_step=True, on_epoch=False, sync_dist=True)
-        self.log("task_weight_img", torch.exp(-self.log_var_img).item(), on_step=True, on_epoch=False, sync_dist=True)
+        self.log("task_weight_spec", torch.exp((-self.log_var_spec).clamp(-10.0, 10.0)).item(), on_step=True, on_epoch=False, sync_dist=True)
+        self.log("task_weight_img", torch.exp((-self.log_var_img).clamp(-10.0, 10.0)).item(), on_step=True, on_epoch=False, sync_dist=True)
         if flow_loss is not None:
             self.log("flow_loss", flow_loss, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
-            self.log("task_weight_z", torch.exp(-self.log_var_z).item(), on_step=True, on_epoch=False, sync_dist=True)
+            self.log("task_weight_z", torch.exp((-self.log_var_z).clamp(-10.0, 10.0)).item(), on_step=True, on_epoch=False, sync_dist=True)
         self.log("grad_norm", self._grad_norm(), on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
         return total_loss
 

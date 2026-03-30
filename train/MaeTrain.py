@@ -40,18 +40,18 @@ if __name__ == "__main__":
 
     wandb.finish()
 
-    # logger = WandbLogger(
-    #     project="Image-Ablation",
-    #     name="Large model, CNN, 500K",
-    #     log_model=True,
-    # )
-
     logger = WandbLogger(
         project="Image-Ablation",
-        id="nfwlrvvr",
-        resume="must",
+        name="Weighting + Redshift Estimation",
         log_model=True,
     )
+
+    # logger = WandbLogger(
+    #     project="Image-Ablation",
+    #     id="nfwlrvvr",
+    #     resume="must",
+    #     log_model=True,
+    # )
 
     print(f"W&B dashboard: {logger.experiment.url}")
 
@@ -71,10 +71,10 @@ if __name__ == "__main__":
         logger=logger,
         accelerator="gpu",
         devices="auto",
-        strategy=DDPStrategy(find_unused_parameters=False, static_graph=True),
+        strategy="ddp",
         num_nodes=4,
-        precision="16-mixed",
-        gradient_clip_val=1.0,
+        precision="32",
+        gradient_clip_val=100.0,
         gradient_clip_algorithm="norm",
     )
 
@@ -114,6 +114,6 @@ if __name__ == "__main__":
         z_flow_steps=50,
     )
 
-    ckpt_path = "/pscratch/sd/p/pzehao/DESIMAE/ImageMHP/epoch=077-val_loss=-0.5690.ckpt"
-    trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader, ckpt_path=ckpt_path)
-    # trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
+    # ckpt_path = "/pscratch/sd/p/pzehao/DESIMAE/ImageMHP/epoch=077-val_loss=-0.5690.ckpt"
+    # trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader, ckpt_path=ckpt_path)
+    trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)

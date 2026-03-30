@@ -245,7 +245,7 @@ def generate_attn_mask(patch_size: int,
                        seq_len: int,
                        device=None,
                        dtype=torch.float32,
-                       has_cls: bool = False):
+                       has_cls: bool = False,
                        return_attn_mask: bool = True):
     """
     Args
