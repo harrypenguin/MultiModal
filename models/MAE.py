@@ -625,6 +625,10 @@ class MaskedAutoencoderViT(pl.LightningModule):
         if flow_loss is not None:
             precision_z = torch.exp(-self.log_var_z)
             total_loss = total_loss + precision_z * flow_loss + self.log_var_z
+        elif self.z_mask_prob > 0:
+            # Ensure log_var_z is always part of the loss graph when z masking is used,
+            # even if no known-z samples exist and flow_loss is None.
+            total_loss = total_loss + self.log_var_z * 0.0
 
         return spec_loss, img_loss, total_loss, flow_loss, pred, error, pred_img, error_img, token_mask
 
