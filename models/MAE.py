@@ -43,6 +43,8 @@ class MaskedAutoencoderViT(pl.LightningModule):
         mlp_ratio=4.0,
         mask_ratio=0.75,
         patch_scheme={"patch_sizes": [1], "mask_ratios": [0.75]},
+        val_patch_size=16,
+        val_mask_ratio=0.5,
         scatter_term=1,
         log_regularizer=1.0,
         lam_grad=0.0,
@@ -405,7 +407,7 @@ class MaskedAutoencoderViT(pl.LightningModule):
         s = s + pe_start + pe_end
         e = e + pe_start + pe_end
 
-        attn_mask, token_mask = generate_attn_mask(self.chunk_size, self.mask_ratio, self.num_patches1d + 1, device=s.device)
+        attn_mask, token_mask = generate_attn_mask(self.chunk_size, self.mask_ratio, self.num_patches1d + 1, device=s.device, has_cls=True)
         attn_mask_img, token_mask_img = generate_attn_mask(1, self.mask_ratio_img, self.num_patchesimg, device=s.device)
 
         cls_token = self.cls_token + self.pos_embed[:, 0, :]
@@ -585,11 +587,10 @@ class MaskedAutoencoderViT(pl.LightningModule):
         if batch is None:
             return None
 
-        self.chunk_size, self.mask_ratio = self.sample_patching()
-        _, mask_ratio_img = self.sample_patching()
-        if mask_ratio_img == self.mask_ratio and mask_ratio_img == 1:
-            mask_ratio_img = 0.9
-        self.mask_ratio_img = mask_ratio_img
+        # Use fixed masking for validation so metrics are deterministic
+        self.chunk_size = self.hparams.val_patch_size
+        self.mask_ratio = self.hparams.val_mask_ratio
+        self.mask_ratio_img = self.hparams.val_mask_ratio
 
         x, spec, weig, error, img, img_w, img_e, z, xy_pix = batch
         spec_loss, img_loss, total_loss, spec_pred, error_pred, pred_img, error_img, token_mask = self.forward(

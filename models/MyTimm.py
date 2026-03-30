@@ -246,7 +246,8 @@ def generate_attn_mask(patch_size: int,
                        mask_ratio: float,
                        seq_len: int,
                        device=None,
-                       dtype=torch.float32):
+                       dtype=torch.float32,
+                       has_cls: bool = False):
     """
     Args
     ----
@@ -257,6 +258,9 @@ def generate_attn_mask(patch_size: int,
     seq_len : int
         Sequence length L (so the mask is L × L).
     device, dtype : torch parameters (optional).
+    has_cls : bool
+        If True, position 0 is a CLS token and will be protected from
+        masking. CLS can always attend to (and be attended by) all tokens.
 
     Returns
     -------
@@ -289,11 +293,15 @@ def generate_attn_mask(patch_size: int,
     attn_mask = torch.zeros(seq_len, seq_len, dtype=dtype, device=device)
     attn_mask[attn_mask_bool] = float('-inf')
 
-    # token_mask[0] = False
-    # attn_mask[0, 0] = 0
     attn_mask.fill_diagonal_(0)
-    # attn_mask[0, :] = 0
-    # attn_mask[:, 0] = 0
-    # To prevent CLS token from being masked
+
+    if has_cls:
+        # Protect the CLS token (position 0) from being masked.
+        # CLS serves as a global summary token — it must always carry a valid
+        # representation, and it must be able to attend to (and be attended by)
+        # all other tokens regardless of their mask status.
+        token_mask[0] = False
+        attn_mask[0, :] = 0
+        attn_mask[:, 0] = 0
 
     return attn_mask, token_mask
