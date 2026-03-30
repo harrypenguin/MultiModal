@@ -59,9 +59,11 @@ Key hyperparameters (configured in `train/MaeTrain.py`):
 
 ## Architecture Notes
 
-- **Encoder**: Separate spectral (1D conv patches, size 31) and image (2D patches, 16×16) pathways merge via shared attention blocks. Redshift conditions the positional embeddings.
+- **Encoder**: Separate spectral (1D conv patches, size 31) and image (2D patches, 16×16) pathways merge via shared attention blocks. Redshift conditions the positional embeddings. Image channels are embedded in a single batched call (not per-channel loop).
 - **Decoder**: Separate prediction heads for flux, flux error, image, and image error. 2D conv refiners improve image output.
-- **Losses** (`SpecLoss.py`): Weighted MSE with inverse variance, gradient/curvature penalties, top-k hard-example mining, FFT high-frequency loss, asymmetric under-prediction penalty, and spiky-feature emphasis. All weights configurable.
+- **Masking**: CLS token (position 0) is always protected from masking via `has_cls=True` in `generate_attn_mask`. Validation uses fixed masking (`val_patch_size`, `val_mask_ratio`) for deterministic metrics.
+- **Losses** (`SpecLoss.py`): Weighted MSE with inverse variance, gradient/curvature penalties, top-k hard-example mining, FFT high-frequency loss, asymmetric under-prediction penalty, and spiky-feature emphasis. All weights configurable. Weight sanitization via shared `_sanitize_weights`/`_sanitize_log_scale` helpers.
+- **Efficiency**: Optional gradient checkpointing (`gradient_checkpointing=True`), flash attention enabled by default, `drop_last=True` on training DataLoader. Single dataset instance shared between train/val splits; augmentation applied via `AugmentedSubset` wrapper on training split only.
 
 ## No Tests / Linting / CI
 
