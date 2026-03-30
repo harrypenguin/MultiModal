@@ -199,19 +199,20 @@ class Block(nn.Module):
         self.drop_path2 = DropPath(drop_path) if drop_path > 0. else nn.Identity()
 
     def forward(self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None, token_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        token_mask_b = None
+        mask_broadcast = None
         if token_mask is not None:
             token_mask_b = token_mask.to(device=x.device, dtype=torch.bool, non_blocking=True)
+            mask_broadcast = token_mask_b.unsqueeze(0).unsqueeze(-1)
 
         attn_result, _ = self.attn(self.norm1(x), attn_mask=attn_mask)
         x = x + self.drop_path1(self.ls1(attn_result))
-        if token_mask_b is not None:
-            x = x.masked_fill(token_mask_b.unsqueeze(0).unsqueeze(-1), 0.0)
+        if mask_broadcast is not None:
+            x = x.masked_fill(mask_broadcast, 0.0)
 
         # MLP sublayer
         x = x + self.drop_path2(self.ls2(self.mlp(self.norm2(x))))
-        if token_mask_b is not None:
-            x = x.masked_fill(token_mask_b.unsqueeze(0).unsqueeze(-1), 0.0)
+        if mask_broadcast is not None:
+            x = x.masked_fill(mask_broadcast, 0.0)
         return x
 
 """ Spectrum to Patch Embedding using Conv1d
