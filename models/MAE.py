@@ -10,8 +10,9 @@ from timm.models.vision_transformer import PatchEmbed
 
 from losses.SpecLoss import forward_loss
 from models.MyTimm import Block, generate_attn_mask, PatchEmbed1D
-from utils.DataProcessing import generate_rest_indices
-from utils.PositionalEmbedding import get_1d_sincos_pos_embed, get_2d_sincos_pos_embed
+from models.RedshiftFlow import RedshiftFlow
+from utils.DataProcessing import compute_rest_frame_wavelengths
+from utils.PositionalEmbedding import get_1d_sincos_pos_embed, get_2d_sincos_pos_embed, compute_sincos_pe
 from utils.Scheduler import CosineWarmupScheduler
 from utils.Visualization import visualize
 
@@ -61,6 +62,10 @@ class MaskedAutoencoderViT(pl.LightningModule):
         sigma_quantile=0.75,
         lam_img_sigma_masked=0.0,
         lam_spec_sigma_masked=0.0,
+        z_mask_prob=0.0,
+        z_flow_hidden_dim=256,
+        z_flow_num_layers=4,
+        z_flow_steps=50,
         norm_layer=nn.LayerNorm,
         norm_pix_loss=False,
     ):
@@ -96,7 +101,8 @@ class MaskedAutoencoderViT(pl.LightningModule):
         self.img_e_modality_embed = nn.Parameter(torch.zeros(1, 1, embed_dim))
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
-        self.pos_embed = nn.Parameter(torch.zeros(1, 10000 + 1, embed_dim), requires_grad=False)
+        self.cls_pos_embed = nn.Parameter(torch.zeros(1, 1, embed_dim), requires_grad=False)
+        self.embed_dim = embed_dim
 
         self.s_attn = nn.ModuleList([
             Block(embed_dim, s_num_heads, mlp_ratio, qkv_bias=True, norm_layer=norm_layer)
@@ -130,7 +136,8 @@ class MaskedAutoencoderViT(pl.LightningModule):
         self.spec_mask_token = nn.Parameter(torch.zeros(1, 1, decoder_embed_dim))
         self.img_mask_token = nn.Parameter(torch.zeros(1, 1, decoder_embed_dim))
 
-        self.decoder_pos_embed = nn.Parameter(torch.zeros(1, 10000 + 1, decoder_embed_dim), requires_grad=False)
+        self.decoder_cls_pos_embed = nn.Parameter(torch.zeros(1, 1, decoder_embed_dim), requires_grad=False)
+        self.decoder_embed_dim = decoder_embed_dim
 
         # --- decoder image positional embeddings (spatial + channel + modality) ---
         dec_img_channel_embed = self._build_fixed_channel_embed(self.num_img_channels, decoder_embed_dim)
@@ -239,6 +246,13 @@ class MaskedAutoencoderViT(pl.LightningModule):
         self.log_var_img = nn.Parameter(torch.zeros(1))
         self.log_var_z = nn.Parameter(torch.zeros(1))
 
+        # Redshift flow module (only instantiated when z masking is enabled)
+        self.z_mask_prob = z_mask_prob
+        self.z_flow_steps = z_flow_steps
+        if z_mask_prob > 0:
+            flow_context_dim = 2 * embed_dim  # spec CLS + img mean pool
+            self.redshift_flow = RedshiftFlow(flow_context_dim, z_flow_hidden_dim, z_flow_num_layers)
+
         # extras
 
         self.coord_mlp = nn.Sequential(
@@ -255,13 +269,8 @@ class MaskedAutoencoderViT(pl.LightningModule):
         self.initialize_weights()
 
     def initialize_weights(self):
-        ###
-        pos_embed = get_1d_sincos_pos_embed(self.pos_embed.shape[-1], 10000, cls_token=True)
-        self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
-
-        decoder_pos_embed = get_1d_sincos_pos_embed(self.decoder_pos_embed.shape[-1], 10000, cls_token=True)
-        self.decoder_pos_embed.data.copy_(torch.from_numpy(decoder_pos_embed).float().unsqueeze(0))
-        ### freeze sin cos PE
+        # CLS positional embeddings initialized to zero (standard for sinusoidal PE).
+        # Rest-frame spectral PE is now computed analytically via compute_sincos_pe().
 
         # initialization
         # initialize patch_embed like nn.Linear (instead of nn.Conv2d)
@@ -398,7 +407,7 @@ class MaskedAutoencoderViT(pl.LightningModule):
         # Flatten channel and spatial dims: (B, C * num_spatial, embed_dim)
         return tokens.reshape(B, -1, tokens.shape[-1])
 
-    def forward_encoder(self, s, e, img, img_e, z, xy_pix, mask_ratio, chunk_size):
+    def forward_encoder(self, s, e, img, img_e, z, xy_pix, mask_ratio, chunk_size, z_mask=None):
         s = self.patch_embed1d(s.unsqueeze(-1))
         e = self.patch_embed1d(e.unsqueeze(-1))
 
@@ -420,21 +429,18 @@ class MaskedAutoencoderViT(pl.LightningModule):
         img = img + img_pos_embed + self.img_modality_embed.to(dtype=img.dtype)
         img_e = img_e + img_pos_embed + self.img_e_modality_embed.to(dtype=img_e.dtype)
 
-        deredshifted_start_indices, deredshifted_end_indices = generate_rest_indices(s, z, patch_size=self.patch_size)
-        pos_table = self.pos_embed[:, 1:, :].squeeze(0)
-        pe_start = pos_table[deredshifted_start_indices]
-        pe_end = pos_table[deredshifted_end_indices]
-        s = s + pe_start + pe_end
-        e = e + pe_start + pe_end
+        # Note: rest-frame PE is applied AFTER modality-specific blocks (below),
+        # not here. This enables the flow to predict z from observed-frame features.
 
         attn_mask, token_mask = generate_attn_mask(self.chunk_size, self.mask_ratio, self.num_patches1d + 1, device=s.device, has_cls=True)
         attn_mask_img, token_mask_img = generate_attn_mask(1, self.mask_ratio_img, self.num_patchesimg, device=s.device)
 
-        cls_token = self.cls_token + self.pos_embed[:, 0, :]
+        cls_token = self.cls_token + self.cls_pos_embed
         cls_tokens = cls_token.expand(s.shape[0], -1, -1)
         s = torch.cat((cls_tokens, s), dim=1)
         e = torch.cat((cls_tokens, e), dim=1)
 
+        # Modality-specific blocks (observed frame — no z needed)
         for blk in self.s_attn:
             s = self._run_block(blk, s, attn_mask, token_mask)
         s = self.norm(s)
@@ -451,6 +457,43 @@ class MaskedAutoencoderViT(pl.LightningModule):
             img_e = self._run_block(blk, img_e, attn_mask_img, token_mask_img)
         img_e = self.norm(img_e)
 
+        # --- Redshift flow: infer z when masked ---
+        flow_loss = None
+        if self.z_mask_prob > 0 and hasattr(self, 'redshift_flow'):
+            # Pool observed-frame features for flow conditioning
+            spec_pool = s[:, 0, :]         # CLS token: (B, embed_dim)
+            img_pool = img.mean(dim=1)     # Mean pool: (B, embed_dim)
+            flow_context = torch.cat([spec_pool, img_pool], dim=-1)  # (B, 2*embed_dim)
+
+            # Flow matching loss on known-z samples (direct supervision)
+            if z_mask is not None:
+                known_mask = ~z_mask
+                if known_mask.any():
+                    flow_loss = self.redshift_flow.flow_matching_loss(
+                        flow_context[known_mask], z[known_mask])
+            else:
+                flow_loss = self.redshift_flow.flow_matching_loss(flow_context, z)
+
+            # Infer z for masked samples (differentiable for reconstruction gradient)
+            if z_mask is not None and z_mask.any():
+                z_inferred = self.redshift_flow.sample_differentiable(
+                    flow_context, num_steps=self.z_flow_steps)
+                z_use = torch.where(z_mask, z_inferred, z)
+            else:
+                z_use = z
+        else:
+            z_use = z
+
+        # --- Apply rest-frame PE using direct sinusoidal computation ---
+        num_patches = s.shape[1] - 1  # exclude CLS token
+        lambda_start, lambda_end = compute_rest_frame_wavelengths(
+            num_patches, z_use, patch_size=self.patch_size)
+        pe_start = compute_sincos_pe(lambda_start, self.embed_dim)  # (B, P, D)
+        pe_end = compute_sincos_pe(lambda_end, self.embed_dim)      # (B, P, D)
+        s = torch.cat([s[:, :1, :], s[:, 1:, :] + pe_start + pe_end], dim=1)
+        e = torch.cat([e[:, :1, :], e[:, 1:, :] + pe_start + pe_end], dim=1)
+
+        # --- Merge modalities and run merged blocks ---
         x = torch.cat([s, e], dim=-1)
         x_img = torch.cat([img, img_e], dim=-1)
         x = torch.cat([x, x_img], dim=1)
@@ -462,7 +505,7 @@ class MaskedAutoencoderViT(pl.LightningModule):
             x = self._run_block(blk, x, overall_attn_mask, overall_token_mask)
         x = self.merged_norm(x)
 
-        return x, overall_attn_mask, overall_token_mask, deredshifted_start_indices, deredshifted_end_indices
+        return x, overall_attn_mask, overall_token_mask, z_use, flow_loss
 
     def forward_decoder(self, x, token_mask, z, xy_pix):
         x = self.decoder_embed(x)
@@ -487,23 +530,19 @@ class MaskedAutoencoderViT(pl.LightningModule):
         padded_seq = torch.cat([left_tokens, main_seq, right_tokens, img_seq], dim=1)
         x = torch.cat([cls_token, padded_seq], dim=1)
 
-        pos_table = self.decoder_pos_embed[:, 1:, :].squeeze(0)
-
         spec_len = x.shape[1] - 1 - self.num_patchesimg
         x_spec = x[:, 1:1 + spec_len, :]
         x_img = x[:, -self.num_patchesimg:, :]
 
-        x_for_pe = x[:, :1 + spec_len, :]
-        deredshifted_start_indices, deredshifted_end_indices = generate_rest_indices(
-            x_for_pe,
-            z,
+        # Direct sinusoidal PE for decoder spectral tokens (differentiable through z)
+        lambda_start, lambda_end = compute_rest_frame_wavelengths(
+            spec_len, z,
             lambda_min_obs=self.lambda_min_obs,
             patch_size=self.patch_size,
         )
-
-        pe_start = pos_table[deredshifted_start_indices]
-        pe_end = pos_table[deredshifted_end_indices]
-        x_spec = x_spec + pe_start[:, 1:, :] + pe_end[:, 1:, :]
+        pe_start = compute_sincos_pe(lambda_start, self.decoder_embed_dim)
+        pe_end = compute_sincos_pe(lambda_end, self.decoder_embed_dim)
+        x_spec = x_spec + pe_start + pe_end
         xy_grid_x = (xy_pix[:, 0] + self.img_center) / self.img_patch
         xy_grid_y = (self.img_center - xy_pix[:, 1]) / self.img_patch
         xy_grid = torch.stack([xy_grid_x, xy_grid_y], dim=-1)
@@ -535,11 +574,12 @@ class MaskedAutoencoderViT(pl.LightningModule):
 
         return s, e, img, img_e
 
-    def forward(self, spec, weig, error, img, weig_img, error_img, z, xy_pix):
-        latent, _, token_mask, _, _ = self.forward_encoder(
-            spec, error, img, error_img, z, xy_pix, self.mask_ratio, self.chunk_size
+    def forward(self, spec, weig, error, img, weig_img, error_img, z, xy_pix, z_mask=None):
+        latent, _, token_mask, z_use, flow_loss = self.forward_encoder(
+            spec, error, img, error_img, z, xy_pix, self.mask_ratio, self.chunk_size,
+            z_mask=z_mask,
         )
-        pred, error, pred_img, error_img = self.forward_decoder(latent, token_mask, z, xy_pix)
+        pred, error, pred_img, error_img = self.forward_decoder(latent, token_mask, z_use, xy_pix)
 
         offset = self.left_patches * self.patch_size
         spec_loss, img_loss, _ = forward_loss(
@@ -579,8 +619,11 @@ class MaskedAutoencoderViT(pl.LightningModule):
         precision_img = torch.exp(-self.log_var_img)
         total_loss = (precision_spec * spec_loss + self.log_var_spec
                       + precision_img * img_loss + self.log_var_img)
+        if flow_loss is not None:
+            precision_z = torch.exp(-self.log_var_z)
+            total_loss = total_loss + precision_z * flow_loss + self.log_var_z
 
-        return spec_loss, img_loss, total_loss, pred, error, pred_img, error_img, token_mask
+        return spec_loss, img_loss, total_loss, flow_loss, pred, error, pred_img, error_img, token_mask
 
     def training_step(self, batch, batch_idx):
         zero_loss = sum((p.sum() * 0.0) for p in self.parameters() if p.requires_grad)
@@ -599,7 +642,14 @@ class MaskedAutoencoderViT(pl.LightningModule):
         self.log("mask_ratio_img", self.mask_ratio_img)
 
         x, spec, weig, error, img, img_w, img_e, z, xy_pix = batch
-        spec_loss, img_loss, total_loss, _, _, _, _, _ = self.forward(spec, weig, error, img, img_w, img_e, z, xy_pix)
+
+        # Stochastically mask z during training
+        z_mask = None
+        if self.z_mask_prob > 0:
+            z_mask = torch.rand(z.shape[0], device=z.device) < self.z_mask_prob
+
+        spec_loss, img_loss, total_loss, flow_loss, _, _, _, _, _ = self.forward(
+            spec, weig, error, img, img_w, img_e, z, xy_pix, z_mask=z_mask)
 
         if not torch.isfinite(total_loss):
             print(f"Non-finite loss at step {batch_idx}; using zero loss")
@@ -610,6 +660,9 @@ class MaskedAutoencoderViT(pl.LightningModule):
         self.log("img_loss", img_loss, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
         self.log("task_weight_spec", torch.exp(-self.log_var_spec).item(), on_step=True, on_epoch=False, sync_dist=True)
         self.log("task_weight_img", torch.exp(-self.log_var_img).item(), on_step=True, on_epoch=False, sync_dist=True)
+        if flow_loss is not None:
+            self.log("flow_loss", flow_loss, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
+            self.log("task_weight_z", torch.exp(-self.log_var_z).item(), on_step=True, on_epoch=False, sync_dist=True)
         self.log("grad_norm", self._grad_norm(), on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
         return total_loss
 
@@ -623,13 +676,24 @@ class MaskedAutoencoderViT(pl.LightningModule):
         self.mask_ratio_img = self.hparams.val_mask_ratio
 
         x, spec, weig, error, img, img_w, img_e, z, xy_pix = batch
-        spec_loss, img_loss, total_loss, spec_pred, error_pred, pred_img, error_img, token_mask = self.forward(
+
+        # Validation with known z (standard)
+        spec_loss, img_loss, total_loss, flow_loss, spec_pred, error_pred, pred_img, error_img, token_mask = self.forward(
             spec, weig, error, img, img_w, img_e, z, xy_pix
         )
 
         self.log("val_loss", total_loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
         self.log("val_spec_loss", spec_loss, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
         self.log("val_img_loss", img_loss, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
+        if flow_loss is not None:
+            self.log("val_flow_loss", flow_loss, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
+
+        # Validation with masked z (tests inference quality)
+        if self.z_mask_prob > 0:
+            z_mask_all = torch.ones(z.shape[0], device=z.device, dtype=torch.bool)
+            _, _, val_loss_zinf, _, _, _, _, _, _ = self.forward(
+                spec, weig, error, img, img_w, img_e, z, xy_pix, z_mask=z_mask_all)
+            self.log("val_loss_z_inferred", val_loss_zinf, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
 
         if batch_idx == 0:
             token_mask = token_mask.unsqueeze(0).expand(spec.size(0), -1)

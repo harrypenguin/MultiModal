@@ -106,6 +106,10 @@ if __name__ == "__main__":
             "mask_ratios": mask_ratios,
             "probs": probs,
         },
+        z_mask_prob=0.3,
+        z_flow_hidden_dim=256,
+        z_flow_num_layers=4,
+        z_flow_steps=50,
     )
 
     ckpt_path = "/pscratch/sd/p/pzehao/DESIMAE/ImageMHP/epoch=077-val_loss=-0.5690.ckpt"
