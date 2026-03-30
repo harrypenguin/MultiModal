@@ -70,7 +70,7 @@ if __name__ == "__main__":
         devices="auto",
         strategy="ddp",
         num_nodes=4,
-        precision="32",
+        precision="16-mixed",
         gradient_clip_val=100.0,
         gradient_clip_algorithm="norm",
     )
