@@ -69,7 +69,6 @@ class Attention(nn.Module):
         self.norm = norm_layer(dim) if scale_norm else nn.Identity()
         self.proj = nn.Linear(dim, dim, bias=proj_bias)
         self.proj_drop = nn.Dropout(proj_drop)
-        self.attn = None
 
     def forward(
             self,
@@ -95,7 +94,6 @@ class Attention(nn.Module):
             attn = attn.softmax(dim=-1)
             attn = torch.nan_to_num(attn, nan=0.0)
             attn = self.attn_drop(attn)
-            self.attn = attn
             x = attn @ v
 
         x = x.transpose(1, 2).reshape(B, N, C)
@@ -199,20 +197,20 @@ class Block(nn.Module):
         self.drop_path2 = DropPath(drop_path) if drop_path > 0. else nn.Identity()
 
     def forward(self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None, token_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        token_mask_b = None
+        mask_broadcast = None
         if token_mask is not None:
             token_mask_b = token_mask.to(device=x.device, dtype=torch.bool, non_blocking=True)
-            x = x.masked_fill(token_mask_b.unsqueeze(0).unsqueeze(-1), 0.0)
-            
+            mask_broadcast = token_mask_b.unsqueeze(0).unsqueeze(-1)
+
         attn_result, _ = self.attn(self.norm1(x), attn_mask=attn_mask)
         x = x + self.drop_path1(self.ls1(attn_result))
-        if token_mask_b is not None:
-            x = x.masked_fill(token_mask_b.unsqueeze(0).unsqueeze(-1), 0.0)
+        if mask_broadcast is not None:
+            x = x.masked_fill(mask_broadcast, 0.0)
 
         # MLP sublayer
         x = x + self.drop_path2(self.ls2(self.mlp(self.norm2(x))))
-        if token_mask_b is not None:
-            x = x.masked_fill(token_mask_b.unsqueeze(0).unsqueeze(-1), 0.0)
+        if mask_broadcast is not None:
+            x = x.masked_fill(mask_broadcast, 0.0)
         return x
 
 """ Spectrum to Patch Embedding using Conv1d
@@ -247,6 +245,7 @@ def generate_attn_mask(patch_size: int,
                        seq_len: int,
                        device=None,
                        dtype=torch.float32,
+                       has_cls: bool = False):
                        return_attn_mask: bool = True):
     """
     Args
@@ -258,6 +257,9 @@ def generate_attn_mask(patch_size: int,
     seq_len : int
         Sequence length L (so the mask is L × L).
     device, dtype : torch parameters (optional).
+    has_cls : bool
+        If True, position 0 is a CLS token and will be protected from
+        masking. CLS can always attend to (and be attended by) all tokens.
 
     Returns
     -------
@@ -298,11 +300,15 @@ def generate_attn_mask(patch_size: int,
     attn_mask = torch.zeros(seq_len, seq_len, dtype=dtype, device=device)
     attn_mask[attn_mask_bool] = float('-inf')
 
-    # token_mask[0] = False
-    # attn_mask[0, 0] = 0
     attn_mask.fill_diagonal_(0)
-    # attn_mask[0, :] = 0
-    # attn_mask[:, 0] = 0
-    # To prevent CLS token from being masked
+
+    if has_cls:
+        # Protect the CLS token (position 0) from being masked.
+        # CLS serves as a global summary token — it must always carry a valid
+        # representation, and it must be able to attend to (and be attended by)
+        # all other tokens regardless of their mask status.
+        token_mask[0] = False
+        attn_mask[0, :] = 0
+        attn_mask[:, 0] = 0
 
     return attn_mask, token_mask

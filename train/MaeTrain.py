@@ -9,6 +9,7 @@ import pytorch_lightning as pl
 from lightning.pytorch import seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.strategies import DDPStrategy
 
 from models.MAE import MaskedAutoencoderViT
 from utils.DataProcessing import CreateMultimodalDataLoadersIter
@@ -25,8 +26,8 @@ if __name__ == "__main__":
     lr_monitor = LearningRateMonitor(logging_interval="step")
 
     checkpoint_callback = ModelCheckpoint(
-        save_top_k=-1,
-        every_n_epochs=1,
+        save_top_k=5,
+        every_n_epochs=5,
         dirpath=os.path.join(os.environ["SCRATCH"], "DESIMAE/Final"),
         filename="{epoch:03d}-{val_loss:.4f}",
         monitor="val_loss",
@@ -56,20 +57,33 @@ if __name__ == "__main__":
 
     torch.cuda.empty_cache()
     torch.set_float32_matmul_precision("medium")
+
+    # Enable flash/memory-efficient attention backends when available
+    # (no-op on hardware that doesn't support them)
+    if hasattr(torch.backends, "cuda"):
+        if hasattr(torch.backends.cuda, "enable_flash_sdp"):
+            torch.backends.cuda.enable_flash_sdp(True)
+        if hasattr(torch.backends.cuda, "enable_mem_efficient_sdp"):
+            torch.backends.cuda.enable_mem_efficient_sdp(True)
     trainer = pl.Trainer(
         callbacks=[checkpoint_callback, lr_monitor],
         max_epochs=600,
         logger=logger,
         accelerator="gpu",
         devices="auto",
-        strategy="ddp",
+        strategy=DDPStrategy(find_unused_parameters=False, static_graph=True),
         num_nodes=4,
-        precision="32",
-        gradient_clip_val=100.0,
+        precision="16-mixed",
+        gradient_clip_val=1.0,
         gradient_clip_algorithm="norm",
     )
 
-    prob = 0.7 / 15
+    patch_sizes =  [1, 1, 2, 4, 8, 16, 32, 64, 128, 64, 32, 16, 8, 4, 2, 1]
+    mask_ratios =  [1, 0.9, 0.8, 0.75, 0.7, 0.65, 0.6, 0.55, 0.5, 0.45, 0.4, 0.35, 0.3, 0.2, 0.1, 0.0]
+    # First scheme (full masking) gets 30% probability; the rest share 70% equally
+    prob_first = 0.3
+    prob_rest = (1.0 - prob_first) / (len(patch_sizes) - 1)
+    probs = [prob_first] + [prob_rest] * (len(patch_sizes) - 1)
 
     model = MaskedAutoencoderViT(
         spec_dim=7781,
@@ -77,6 +91,7 @@ if __name__ == "__main__":
         warmup_epoch=5,
         mask_ratio=0.75,
         lam_img_sigma_masked=0.1,
+        lam_spec_sigma_masked=0.1,
         embed_dim=256,
         merged_depth=4,
         merged_num_heads=8,
@@ -89,10 +104,14 @@ if __name__ == "__main__":
         decoder_num_heads=16,
         decoder_MLP_coefficient=1,
         patch_scheme={
-            "patch_sizes": [1, 1, 2, 4, 8, 16, 32, 64, 128, 64, 32, 16, 8, 4, 2, 1],
-            "mask_ratios": [1, 0.9, 0.8, 0.75, 0.7, 0.65, 0.6, 0.55, 0.5, 0.45, 0.4, 0.35, 0.3, 0.2, 0.1, 0.0],
-            "probs": [0.3, prob, prob, prob, prob, prob, prob, prob, prob, prob, prob, prob, prob, prob, prob, prob],
+            "patch_sizes": patch_sizes,
+            "mask_ratios": mask_ratios,
+            "probs": probs,
         },
+        z_mask_prob=0.3,
+        z_flow_hidden_dim=256,
+        z_flow_num_layers=4,
+        z_flow_steps=50,
     )
 
     ckpt_path = "/pscratch/sd/p/pzehao/DESIMAE/ImageMHP/epoch=077-val_loss=-0.5690.ckpt"

@@ -2,6 +2,16 @@ import torch
 import torch.nn.functional as F
 
 
+def _sanitize_weights(w, eps=1e-6):
+    """Clamp and replace non-finite values in inverse-variance weights."""
+    return torch.nan_to_num(torch.clamp(w, min=eps), nan=eps, posinf=1.0 / eps, neginf=eps)
+
+
+def _sanitize_log_scale(log_s):
+    """Clamp and replace non-finite values in log-scale predictions."""
+    return torch.nan_to_num(log_s, nan=0.0, posinf=10.0, neginf=-10.0).clamp(-10.0, 10.0)
+
+
 def grad1(x):
     # x: (B, L)
     return x[..., 1:] - x[..., :-1]
@@ -105,6 +115,7 @@ def forward_loss(
     lam_sigma_right=0.0,
     sigma_quantile=0.75,
     lam_img_sigma_masked=0.0,
+    lam_spec_sigma_masked=0.0,
 ):
     """
     mask: [B, P or P+1], 0=keep, 1=remove. If P+1, the first is CLS and is dropped.
@@ -140,15 +151,10 @@ def forward_loss(
     pixel_mask = pixel_mask_full[..., offset:end].to(x.dtype)  # (B, L), 1=masked
 
     # ---- Base loss over ALL pixels ----
-    w_safe = torch.nan_to_num(torch.clamp(w, min=eps), nan=eps, posinf=1.0 / eps, neginf=eps)
-    log_s = torch.nan_to_num(log_s, nan=0.0, posinf=10.0, neginf=-10.0).clamp(-10.0, 10.0)
+    w_safe = _sanitize_weights(w, eps)
+    log_s = _sanitize_log_scale(log_s)
     sigma_hat_sq = weight * torch.exp(log_s).clamp(min=eps).pow(2)
     denom = (1.0 / w_safe + sigma_hat_sq).clamp(min=eps)
-
-    if torch.any(torch.isnan(denom)):
-        print("NaNs detected in denominator")
-    if torch.any(denom <= 0):
-        print(f"Non-positive denominator. Min: {denom.min().item()}")
 
     sq_error = (x_hat - x).pow(2)
     base_pixel = 0.5 * (sq_error / denom + regularizer * torch.log(denom.clamp_min(eps)))
@@ -212,6 +218,12 @@ def forward_loss(
         Lsig = mask_mean(over, pixel_mask)
         loss = loss + lam_sigma_right * Lsig
 
+    if lam_spec_sigma_masked > 0.0:
+        sigma_spec = torch.exp(log_s).clamp_min(eps)
+        denom_mask = pixel_mask.sum().clamp_min(1.0)
+        spec_sigma_penalty = (sigma_spec.pow(2) * pixel_mask).sum() / denom_mask
+        loss = loss + lam_spec_sigma_masked * spec_sigma_penalty
+
     B = img.size(0)
     P = img_patch
     C = num_img_channels
@@ -223,8 +235,8 @@ def forward_loss(
     weig_img = weig_img.unfold(2, P, P).unfold(3, P, P).permute(0, 2, 3, 1, 4, 5).reshape(img.size(0), N, C * P * P)
     img = img.unfold(2, P, P).unfold(3, P, P).permute(0, 2, 3, 1, 4, 5).reshape(img.size(0), N, C * P * P)
 
-    weig_img = torch.nan_to_num(torch.clamp(weig_img, min=eps), nan=eps, posinf=1.0 / eps, neginf=eps)
-    error_img = torch.nan_to_num(error_img, nan=0.0, posinf=10.0, neginf=-10.0).clamp(-10.0, 10.0)
+    weig_img = _sanitize_weights(weig_img, eps)
+    error_img = _sanitize_log_scale(error_img)
 
     img_loss = 0.5 * (((img_hat - img) ** 2) / (1.0 / weig_img + weight * torch.exp(error_img).clamp_min(eps) ** 2)
               + regularizer * torch.log((1.0 / weig_img + weight * torch.exp(error_img).clamp_min(eps) ** 2))).mean()

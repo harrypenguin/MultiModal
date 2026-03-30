@@ -1,5 +1,5 @@
 import numpy as np
-from torch.utils.data import TensorDataset, DataLoader, Dataset, random_split, Subset
+from torch.utils.data import DataLoader, Dataset, Subset
 from scipy.ndimage import convolve1d
 import pandas
 import torch
@@ -21,7 +21,7 @@ def get_extreme_mask(spectra: np.ndarray, ivar: np.ndarray) -> np.ndarray:
 
 
 class MultimodalDataset(Dataset):
-    def __init__(self, path, start=0, end=None, augment=False, max_shift=50):
+    def __init__(self, path, start=0, end=None):
         self.data = zarr.open(path, mode='r')
         self.flux = self.data['FLUX']
         self.ivar = self.data['IVAR']
@@ -42,9 +42,6 @@ class MultimodalDataset(Dataset):
             raise ValueError(f"Invalid range: start={self.start}, end={self.end}, total={n_total}")
 
         sl = slice(self.start, self.end)
-
-        self.augment = augment
-        self.max_shift = max_shift
 
         self.redshift = p['Z'].iloc[sl].values.astype(np.float32)
         target_ra = p['TARGET_RA'].iloc[sl].values.astype(np.float32)
@@ -70,12 +67,6 @@ class MultimodalDataset(Dataset):
 
         self.dx_pix = (ra_to_x_sign * dx_arcsec / pix_scale_arcsec).astype(np.float32)
         self.dy_pix = (dec_to_y_sign * dy_arcsec / pix_scale_arcsec).astype(np.float32)
-
-    def _shift_image(self, arr, dx, dy):
-        # arr: (C, H, W)
-        out = np.roll(arr, shift=dy, axis=-2)  # rows
-        out = np.roll(out, shift=dx, axis=-1)  # cols
-        return out
 
     def __getitem__(self, idx):
         try:
@@ -115,20 +106,10 @@ class MultimodalDataset(Dataset):
             z = np.float32(self.redshift[local_idx])
             xy_pix = np.array([self.dx_pix[local_idx], self.dy_pix[local_idx]], dtype=np.float32)
 
-            if self.augment and self.max_shift > 0:
-                dx = np.random.randint(-self.max_shift, self.max_shift + 1)
-                dy = np.random.randint(-self.max_shift, self.max_shift + 1)
-
-                img = self._shift_image(img, dx, dy)
-                img_ivar = self._shift_image(img_ivar, dx, dy)
-                img_error = self._shift_image(img_error, dx, dy)
-
-                xy_pix = xy_pix + np.array([dx, -dy], dtype=np.float32)
-
             spec_tensor = torch.from_numpy(spectra)
             return (
                 spec_tensor,
-                spec_tensor.clone(),
+                spec_tensor,
                 torch.from_numpy(ivar),
                 torch.from_numpy(error),
                 torch.from_numpy(img),
@@ -145,6 +126,39 @@ class MultimodalDataset(Dataset):
     def __len__(self):
         return self.end - self.start
 
+class AugmentedSubset(Dataset):
+    """Wraps a Subset to apply image-shift augmentation on the fly.
+
+    This exists so that a single MultimodalDataset can be shared between
+    training and validation splits.  Only the training split is wrapped
+    with this class, which applies random image shifts during __getitem__.
+    """
+
+    def __init__(self, subset, max_shift=50):
+        self.subset = subset
+        self.max_shift = max_shift
+
+    def __len__(self):
+        return len(self.subset)
+
+    def __getitem__(self, idx):
+        item = self.subset[idx]
+        if item is None or self.max_shift <= 0:
+            return item
+
+        spec, spec2, ivar, error, img, img_ivar, img_error, z, xy_pix = item
+
+        dx = np.random.randint(-self.max_shift, self.max_shift + 1)
+        dy = np.random.randint(-self.max_shift, self.max_shift + 1)
+
+        img = torch.roll(img, shifts=(dy, dx), dims=(-2, -1))
+        img_ivar = torch.roll(img_ivar, shifts=(dy, dx), dims=(-2, -1))
+        img_error = torch.roll(img_error, shifts=(dy, dx), dims=(-2, -1))
+        xy_pix = xy_pix + torch.tensor([dx, -dy], dtype=torch.float32)
+
+        return (spec, spec2, ivar, error, img, img_ivar, img_error, z, xy_pix)
+
+
 def CreateMultimodalDataLoadersIter(
     path='/pscratch/sd/p/pzehao/iron/desi_maglim_19_5.zarr',
     end=1000000,
@@ -153,22 +167,26 @@ def CreateMultimodalDataLoadersIter(
     augment_train=True,
     max_shift=50,
 ):
-    train_base = MultimodalDataset(path, start=0, end=end, augment=augment_train, max_shift=max_shift)
-    val_base   = MultimodalDataset(path, start=0, end=end, augment=False, max_shift=0)
+    # Single dataset instance — zarr + parquet loaded only once
+    base = MultimodalDataset(path, start=0, end=end)
 
-    total_size = len(train_base)
+    total_size = len(base)
     if train_size > total_size:
         raise ValueError(f"train_size ({train_size}) exceeds dataset size ({total_size})")
-
-    val_size = total_size - train_size
 
     g = torch.Generator().manual_seed(130)
     perm = torch.randperm(total_size, generator=g).tolist()
     train_idx = perm[:train_size]
     val_idx = perm[train_size:]
 
-    train_dataset = Subset(train_base, train_idx)
-    val_dataset   = Subset(val_base, val_idx)
+    train_subset = Subset(base, train_idx)
+    val_dataset = Subset(base, val_idx)
+
+    # Wrap training subset with augmentation if requested
+    if augment_train:
+        train_dataset = AugmentedSubset(train_subset, max_shift=max_shift)
+    else:
+        train_dataset = train_subset
 
     num_workers = 7
     loader_kwargs = dict(
@@ -178,12 +196,13 @@ def CreateMultimodalDataLoadersIter(
         persistent_workers=(num_workers > 0),
     )
     if num_workers > 0:
-        loader_kwargs["prefetch_factor"] = 2
+        loader_kwargs["prefetch_factor"] = 4
 
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
+        drop_last=True,
         **loader_kwargs,
     )
     val_loader = DataLoader(
@@ -240,6 +259,35 @@ def generate_rest_indices(s: torch.Tensor, z: float,
     rest_end_idx = lambda_end_rest.round().long().clamp(0, int(lambda_max_rest) - 1)
 
     return rest_start_idx, rest_end_idx
+
+
+def compute_rest_frame_wavelengths(num_patches: int, z: torch.Tensor,
+                                   lambda_min_obs: float = 3600.0,
+                                   lambda_step_obs: float = 0.8,
+                                   patch_size: int = 31):
+    """Compute rest-frame wavelengths for each spectral patch.
+
+    Fully differentiable through z — no rounding or integer indexing.
+
+    Args:
+        num_patches: number of spectral patches
+        z: (B,) or (B, 1) redshift tensor
+        lambda_min_obs: minimum observed wavelength (Å)
+        lambda_step_obs: wavelength step size in observed frame (Å)
+        patch_size: number of wavelength bins per patch
+
+    Returns:
+        lambda_start_rest: (B, num_patches) rest-frame start wavelengths
+        lambda_end_rest: (B, num_patches) rest-frame end wavelengths
+    """
+    z = z.view(-1, 1)  # (B, 1)
+    patch_idx = torch.arange(num_patches, device=z.device, dtype=z.dtype)  # (P,)
+    lambda_start_obs = lambda_min_obs + patch_idx * patch_size * lambda_step_obs
+    lambda_end_obs = lambda_start_obs + (patch_size - 1) * lambda_step_obs
+    lambda_start_rest = lambda_start_obs / (1 + z)  # (B, P)
+    lambda_end_rest = lambda_end_obs / (1 + z)
+    return lambda_start_rest, lambda_end_rest
+
 
 # Spectra smoothing utils from Biprateep
 def get_kernel(nsmooth: int) -> np.ndarray:
