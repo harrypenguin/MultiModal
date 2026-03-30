@@ -246,6 +246,7 @@ def generate_attn_mask(patch_size: int,
                        device=None,
                        dtype=torch.float32,
                        has_cls: bool = False):
+                       return_attn_mask: bool = True):
     """
     Args
     ----
@@ -262,11 +263,16 @@ def generate_attn_mask(patch_size: int,
 
     Returns
     -------
-    attn_mask : (L, L) tensor, float
-        0 for visible positions, -inf where *either* the query
-        or key token belongs to a masked band.
-    token_mask : (L,) bool
-        True for tokens that were selected for masking
+    If return_attn_mask is True:
+      attn_mask : (L, L) tensor, float
+          0 for visible positions, -inf where *either* the query
+          or key token belongs to a masked band.
+      token_mask : (L,) bool
+          True for tokens that were selected for masking
+
+    If return_attn_mask is False:
+      token_mask : (L,) bool
+          True for tokens that were selected for masking
     """
     patch_size = int(patch_size)       
 
@@ -285,6 +291,9 @@ def generate_attn_mask(patch_size: int,
         start = b * patch_size
         end   = min((b + 1) * patch_size, seq_len)
         token_mask[start:end] = True
+
+    if not return_attn_mask:
+        return token_mask
 
     attn_mask_bool = token_mask.unsqueeze(0) | token_mask.unsqueeze(1)
 

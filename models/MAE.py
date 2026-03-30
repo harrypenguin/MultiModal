@@ -379,6 +379,7 @@ class MaskedAutoencoderViT(pl.LightningModule):
         img = refiner(img)
         return self._image_to_img_tokens(img)
 
+<<<<<<< claude/create-claude-md-Pmahx
     def _run_block(self, blk, x, *args):
         """Run a transformer block with optional gradient checkpointing."""
         if self.hparams.gradient_checkpointing and self.training:
@@ -407,6 +408,18 @@ class MaskedAutoencoderViT(pl.LightningModule):
         return tokens.reshape(B, -1, tokens.shape[-1])
 
     def forward_encoder(self, s, e, img, img_e, z, xy_pix, mask_ratio, chunk_size, z_mask=None):
+=======
+    def _restore_masked_tokens(self, visible_tokens, keep_mask, mask_token):
+        B = visible_tokens.shape[0]
+        full_tokens = mask_token.to(dtype=visible_tokens.dtype, device=visible_tokens.device).repeat(
+            B, keep_mask.numel(), 1
+        )
+        keep_idx = keep_mask.nonzero(as_tuple=False).squeeze(1)
+        full_tokens[:, keep_idx, :] = visible_tokens
+        return full_tokens
+
+    def forward_encoder(self, s, e, img, img_e, z, xy_pix, mask_ratio, chunk_size):
+>>>>>>> master
         s = self.patch_embed1d(s.unsqueeze(-1))
         e = self.patch_embed1d(e.unsqueeze(-1))
 
@@ -431,14 +444,36 @@ class MaskedAutoencoderViT(pl.LightningModule):
         # Note: rest-frame PE is applied AFTER modality-specific blocks (below),
         # not here. This enables the flow to predict z from observed-frame features.
 
+<<<<<<< claude/create-claude-md-Pmahx
         attn_mask, token_mask = generate_attn_mask(self.chunk_size, self.mask_ratio, self.num_patches1d + 1, device=s.device, has_cls=True)
         attn_mask_img, token_mask_img = generate_attn_mask(1, self.mask_ratio_img, self.num_patchesimg, device=s.device)
+=======
+        token_mask = generate_attn_mask(
+            chunk_size,
+            mask_ratio,
+            self.num_patches1d + 1,
+            device=s.device,
+            return_attn_mask=False,
+        )
+        token_mask_img = generate_attn_mask(
+            1,
+            self.mask_ratio_img,
+            self.num_patchesimg,
+            device=s.device,
+            return_attn_mask=False,
+        )
+
+        # Keep CLS token always visible.
+        token_mask = token_mask.clone()
+        token_mask[0] = False
+>>>>>>> master
 
         cls_token = self.cls_token + self.cls_pos_embed
         cls_tokens = cls_token.expand(s.shape[0], -1, -1)
         s = torch.cat((cls_tokens, s), dim=1)
         e = torch.cat((cls_tokens, e), dim=1)
 
+<<<<<<< claude/create-claude-md-Pmahx
         # Modality-specific blocks (observed frame — no z needed)
         for blk in self.s_attn:
             s = self._run_block(blk, s, attn_mask, token_mask)
@@ -454,6 +489,31 @@ class MaskedAutoencoderViT(pl.LightningModule):
 
         for blk in self.img_e_attn:
             img_e = self._run_block(blk, img_e, attn_mask_img, token_mask_img)
+=======
+        spec_keep = ~token_mask
+        img_keep = ~token_mask_img
+
+        # Canonical MAE behavior: drop masked tokens before encoder blocks.
+        s = s[:, spec_keep, :]
+        e = e[:, spec_keep, :]
+        img = img[:, img_keep, :]
+        img_e = img_e[:, img_keep, :]
+
+        for blk in self.s_attn:
+            s = blk(s)
+        s = self.norm(s)
+
+        for blk in self.e_attn:
+            e = blk(e)
+        e = self.norm(e)
+
+        for blk in self.img_attn:
+            img = blk(img)
+        img = self.norm(img)
+
+        for blk in self.img_e_attn:
+            img_e = blk(img_e)
+>>>>>>> master
         img_e = self.norm(img_e)
 
         # --- Redshift flow: infer z when masked ---
@@ -501,26 +561,35 @@ class MaskedAutoencoderViT(pl.LightningModule):
         x_img = torch.cat([img, img_e], dim=-1)
         x = torch.cat([x, x_img], dim=1)
 
-        overall_attn_mask = torch.block_diag(attn_mask, attn_mask_img)
         overall_token_mask = torch.cat([token_mask, token_mask_img], dim=0)
 
         for blk in self.merged_blocks:
+<<<<<<< claude/create-claude-md-Pmahx
             x = self._run_block(blk, x, overall_attn_mask, overall_token_mask)
         x = self.merged_norm(x)
 
         return x, overall_attn_mask, overall_token_mask, z_use, flow_loss
+=======
+            x = blk(x)
+        x = self.merged_norm(x)
+
+        return x, overall_token_mask
+>>>>>>> master
 
     def forward_decoder(self, x, token_mask, z, xy_pix):
         x = self.decoder_embed(x)
 
-        token_mask = token_mask.unsqueeze(0).expand(x.shape[0], -1)
-        spec_mask = token_mask[:, :-self.num_patchesimg]
-        img_mask = token_mask[:, -self.num_patchesimg:]
+        spec_mask = token_mask[:-self.num_patchesimg].bool()
+        img_mask = token_mask[-self.num_patchesimg:].bool()
 
-        x_spec = x[:, :-self.num_patchesimg, :]
-        x_img = x[:, -self.num_patchesimg:, :]
-        x_spec[spec_mask] = self.spec_mask_token.to(x.dtype)
-        x_img[img_mask] = self.img_mask_token.to(x.dtype)
+        spec_keep = ~spec_mask
+        img_keep = ~img_mask
+        num_spec_visible = int(spec_keep.sum().item())
+        x_spec_visible = x[:, :num_spec_visible, :]
+        x_img_visible = x[:, num_spec_visible:, :]
+
+        x_spec = self._restore_masked_tokens(x_spec_visible, spec_keep, self.spec_mask_token)
+        x_img = self._restore_masked_tokens(x_img_visible, img_keep, self.img_mask_token)
         x = torch.cat([x_spec, x_img], dim=1)
 
         B, _, _ = x.shape
@@ -577,10 +646,16 @@ class MaskedAutoencoderViT(pl.LightningModule):
 
         return s, e, img, img_e
 
+<<<<<<< claude/create-claude-md-Pmahx
     def forward(self, spec, weig, error, img, weig_img, error_img, z, xy_pix, z_mask=None):
         latent, _, token_mask, z_use, flow_loss = self.forward_encoder(
             spec, error, img, error_img, z, xy_pix, self.mask_ratio, self.chunk_size,
             z_mask=z_mask,
+=======
+    def forward(self, spec, weig, error, img, weig_img, error_img, z, xy_pix):
+        latent, token_mask = self.forward_encoder(
+            spec, error, img, error_img, z, xy_pix, self.mask_ratio, self.chunk_size
+>>>>>>> master
         )
         pred, error, pred_img, error_img = self.forward_decoder(latent, token_mask, z_use, xy_pix)
 
