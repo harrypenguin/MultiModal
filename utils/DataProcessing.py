@@ -163,10 +163,9 @@ class AugmentedSubset(Dataset):
         dx = np.random.randint(-self.max_shift, self.max_shift + 1)
         dy = np.random.randint(-self.max_shift, self.max_shift + 1)
 
-        # np.roll returns a new array, so no .copy() needed for from_numpy
-        img = torch.from_numpy(shift_image(img.numpy(), dx, dy))
-        img_ivar = torch.from_numpy(shift_image(img_ivar.numpy(), dx, dy))
-        img_error = torch.from_numpy(shift_image(img_error.numpy(), dx, dy))
+        img = torch.roll(img, shifts=(dy, dx), dims=(-2, -1))
+        img_ivar = torch.roll(img_ivar, shifts=(dy, dx), dims=(-2, -1))
+        img_error = torch.roll(img_error, shifts=(dy, dx), dims=(-2, -1))
         xy_pix = xy_pix + torch.tensor([dx, -dy], dtype=torch.float32)
 
         return (spec, spec2, ivar, error, img, img_ivar, img_error, z, xy_pix)

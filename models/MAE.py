@@ -72,6 +72,7 @@ class MaskedAutoencoderViT(pl.LightningModule):
         self.img_patch = 16
         self.num_img_channels = 6
         self.patch_embedimg = PatchEmbed(img_size=128, patch_size=self.img_patch, in_chans=1, embed_dim=embed_dim)
+        self.img_center = self.patch_embedimg.img_size[0] / 2.0
         self.num_patches1d = self.patch_embed1d.num_patches
         self.num_patchesimg = self.patch_embedimg.num_patches * self.num_img_channels
         self.left_patches = left_patches
@@ -412,9 +413,8 @@ class MaskedAutoencoderViT(pl.LightningModule):
         s = self.patch_embed1d(s.unsqueeze(-1))
         e = self.patch_embed1d(e.unsqueeze(-1))
 
-        img_center = self.patch_embedimg.img_size[0] / 2.0
-        xy_grid_x = (xy_pix[:, 0] + img_center) / self.img_patch
-        xy_grid_y = (img_center - xy_pix[:, 1]) / self.img_patch
+        xy_grid_x = (xy_pix[:, 0] + self.img_center) / self.img_patch
+        xy_grid_y = (self.img_center - xy_pix[:, 1]) / self.img_patch
         xy_grid = torch.stack([xy_grid_x, xy_grid_y], dim=-1)
 
         xy_pe = self._continuous_2d_sincos(xy_grid, self.hparams.embed_dim, s.dtype, s.device).unsqueeze(1)
@@ -515,9 +515,8 @@ class MaskedAutoencoderViT(pl.LightningModule):
         pe_start = pos_table[deredshifted_start_indices]
         pe_end = pos_table[deredshifted_end_indices]
         x_spec = x_spec + pe_start[:, 1:, :] + pe_end[:, 1:, :]
-        img_center = self.patch_embedimg.img_size[0] / 2.0
-        xy_grid_x = (xy_pix[:, 0] + img_center) / self.img_patch
-        xy_grid_y = (img_center - xy_pix[:, 1]) / self.img_patch
+        xy_grid_x = (xy_pix[:, 0] + self.img_center) / self.img_patch
+        xy_grid_y = (self.img_center - xy_pix[:, 1]) / self.img_patch
         xy_grid = torch.stack([xy_grid_x, xy_grid_y], dim=-1)
         xy_pe = self._continuous_2d_sincos(xy_grid, self.hparams.decoder_embed_dim, x.dtype, x.device).unsqueeze(1)
         x_spec = x_spec + xy_pe
