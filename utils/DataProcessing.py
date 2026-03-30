@@ -272,6 +272,35 @@ def generate_rest_indices(s: torch.Tensor, z: float,
 
     return rest_start_idx, rest_end_idx
 
+
+def compute_rest_frame_wavelengths(num_patches: int, z: torch.Tensor,
+                                   lambda_min_obs: float = 3600.0,
+                                   lambda_step_obs: float = 0.8,
+                                   patch_size: int = 31):
+    """Compute rest-frame wavelengths for each spectral patch.
+
+    Fully differentiable through z — no rounding or integer indexing.
+
+    Args:
+        num_patches: number of spectral patches
+        z: (B,) or (B, 1) redshift tensor
+        lambda_min_obs: minimum observed wavelength (Å)
+        lambda_step_obs: wavelength step size in observed frame (Å)
+        patch_size: number of wavelength bins per patch
+
+    Returns:
+        lambda_start_rest: (B, num_patches) rest-frame start wavelengths
+        lambda_end_rest: (B, num_patches) rest-frame end wavelengths
+    """
+    z = z.view(-1, 1)  # (B, 1)
+    patch_idx = torch.arange(num_patches, device=z.device, dtype=z.dtype)  # (P,)
+    lambda_start_obs = lambda_min_obs + patch_idx * patch_size * lambda_step_obs
+    lambda_end_obs = lambda_start_obs + (patch_size - 1) * lambda_step_obs
+    lambda_start_rest = lambda_start_obs / (1 + z)  # (B, P)
+    lambda_end_rest = lambda_end_obs / (1 + z)
+    return lambda_start_rest, lambda_end_rest
+
+
 # Spectra smoothing utils from Biprateep
 def get_kernel(nsmooth: int) -> np.ndarray:
     """

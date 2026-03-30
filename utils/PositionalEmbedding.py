@@ -44,6 +44,28 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
     emb = np.concatenate([np.sin(out), np.cos(out)], axis=1)  # (M, D)
     return emb
 
+def compute_sincos_pe(wavelengths, embed_dim):
+    """Compute sinusoidal positional embeddings directly from continuous values.
+
+    Fully differentiable — gradients flow through wavelengths (and thus through z).
+    Uses the same formula as get_1d_sincos_pos_embed_from_grid:
+        PE(pos, 2i)   = sin(pos / 10000^(2i/D))
+        PE(pos, 2i+1) = cos(pos / 10000^(2i/D))
+
+    Args:
+        wavelengths: (...,) tensor of position values (any shape, continuous floats)
+        embed_dim: int, embedding dimension (must be even)
+
+    Returns:
+        (..., embed_dim) tensor of positional embeddings
+    """
+    half_dim = embed_dim // 2
+    omega = torch.arange(half_dim, device=wavelengths.device, dtype=wavelengths.dtype)
+    omega = 1.0 / (10000 ** (omega / half_dim))
+    angles = wavelengths.unsqueeze(-1) * omega  # (..., D/2)
+    return torch.cat([torch.sin(angles), torch.cos(angles)], dim=-1)  # (..., D)
+
+
 def get_2d_sincos_pos_embed(embed_dim, grid_h, grid_w):
     if embed_dim % 4 != 0:
         raise ValueError(f"embed_dim must be divisible by 4 for 2D sin-cos PE, got {embed_dim}")
