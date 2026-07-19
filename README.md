@@ -44,7 +44,7 @@ MultiModal/
 
 ## Data
 
-Our model is pretrained with data from the Dark Energy Spectroscopic Instrument survey, Data Release 1 ([DESI DR1](https://arxiv.org/abs/2503.14745)). If you have access to NERSC, you may access these assets directly, following the paths below.
+Our model is pretrained with data from the Dark Energy Spectroscopic Instrument survey, Data Release 1 ([DESI DR1](https://arxiv.org/abs/2503.14745)). If you have access to [NERSC](https://www.nersc.gov/what-we-do/computing-for-science/perlmutter), you may access these assets directly, following the paths below.
 
 | Asset | Path | Description |
 |-------|------|-------------|
