@@ -1,1 +1,3 @@
-from .MAE import MaskedAutoencoderViT
+"""Public exports for the models package."""
+
+from .mae import MaskedAutoencoderViT

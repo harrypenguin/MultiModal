@@ -1,3 +1,5 @@
+"""Main multimodal masked autoencoder model."""
+
 import math
 import random
 import time
@@ -8,16 +10,18 @@ import torch
 import torch.nn as nn
 from timm.models.vision_transformer import PatchEmbed
 
-from losses.SpecLoss import forward_loss
-from models.MyTimm import Block, generate_attn_mask, PatchEmbed1D
-from utils.DataProcessing import generate_rest_indices
-from utils.PositionalEmbedding import get_1d_sincos_pos_embed, get_2d_sincos_pos_embed
-from utils.Scheduler import CosineWarmupScheduler
-from utils.Visualization import visualize
+from losses.gaussian_nll import forward_loss
+from models.mytimm import Block, generate_attn_mask, PatchEmbed1D
+from utils.data_processing import generate_rest_indices
+from utils.positional_embedding import get_1d_sincos_pos_embed, get_2d_sincos_pos_embed
+from utils.scheduler import CosineWarmupScheduler
+from utils.visualization import visualize
 
 
 class MaskedAutoencoderViT(pl.LightningModule):
-    """ Masked Autoencoder with VisionTransformer backbone, copied from https://github.com/facebookresearch/mae/blob/main/models_mae.py 
+    """
+    Multimodal Masked Autoencoder with Vision Transformer backbone for spectra and images.
+    ref: https://github.com/facebookresearch/mae/blob/main/models_mae.py
     """
 
     def __init__(
@@ -46,16 +50,6 @@ class MaskedAutoencoderViT(pl.LightningModule):
         patch_scheme={"patch_sizes": [1], "mask_ratios": [0.75]},
         scatter_term=1,
         log_regularizer=1.0,
-        lam_grad=0.0,
-        lam_curv=0.0,
-        lam_fft=0.0,
-        lam_topk=0.0,
-        topk_frac=0.10,
-        lam_spiky=0.0,
-        spiky_tau=0.8,
-        lam_under=0.0,
-        lam_sigma_right=0.0,
-        sigma_quantile=0.75,
         lam_img_sigma_masked=0.0,
         norm_layer=nn.LayerNorm,
         norm_pix_loss=False,
@@ -68,7 +62,9 @@ class MaskedAutoencoderViT(pl.LightningModule):
         self.patch_embed1d = PatchEmbed1D(spec_dim, patch_size, embed_dim)
         self.img_patch = 16
         self.num_img_channels = 6
-        self.patch_embedimg = PatchEmbed(img_size=128, patch_size=self.img_patch, in_chans=1, embed_dim=embed_dim)
+        self.patch_embedimg = PatchEmbed(
+            img_size=128, patch_size=self.img_patch, in_chans=1, embed_dim=embed_dim
+        )
         self.num_patches1d = self.patch_embed1d.num_patches
         self.num_patchesimg = self.patch_embedimg.num_patches * self.num_img_channels
         self.left_patches = left_patches
@@ -94,29 +90,71 @@ class MaskedAutoencoderViT(pl.LightningModule):
         )
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
-        self.pos_embed = nn.Parameter(torch.zeros(1, 10000 + 1, embed_dim), requires_grad=False)
+        self.pos_embed = nn.Parameter(
+            torch.zeros(1, 10000 + 1, embed_dim), requires_grad=False
+        )
 
-        self.s_attn = nn.ModuleList([
-            Block(embed_dim, s_num_heads, mlp_ratio, qkv_bias=True, norm_layer=norm_layer)
-            for _ in range(s_depth)
-        ])
-        self.e_attn = nn.ModuleList([
-            Block(embed_dim, e_num_heads, mlp_ratio, qkv_bias=True, norm_layer=norm_layer)
-            for _ in range(e_depth)
-        ])
-        self.img_attn = nn.ModuleList([
-            Block(embed_dim, s_num_heads, mlp_ratio, qkv_bias=True, norm_layer=norm_layer)
-            for _ in range(s_depth)
-        ])
-        self.img_e_attn = nn.ModuleList([
-            Block(embed_dim, e_num_heads, mlp_ratio, qkv_bias=True, norm_layer=norm_layer)
-            for _ in range(e_depth)
-        ])
+        self.s_attn = nn.ModuleList(
+            [
+                Block(
+                    embed_dim,
+                    s_num_heads,
+                    mlp_ratio,
+                    qkv_bias=True,
+                    norm_layer=norm_layer,
+                )
+                for _ in range(s_depth)
+            ]
+        )
+        self.e_attn = nn.ModuleList(
+            [
+                Block(
+                    embed_dim,
+                    e_num_heads,
+                    mlp_ratio,
+                    qkv_bias=True,
+                    norm_layer=norm_layer,
+                )
+                for _ in range(e_depth)
+            ]
+        )
+        self.img_attn = nn.ModuleList(
+            [
+                Block(
+                    embed_dim,
+                    s_num_heads,
+                    mlp_ratio,
+                    qkv_bias=True,
+                    norm_layer=norm_layer,
+                )
+                for _ in range(s_depth)
+            ]
+        )
+        self.img_e_attn = nn.ModuleList(
+            [
+                Block(
+                    embed_dim,
+                    e_num_heads,
+                    mlp_ratio,
+                    qkv_bias=True,
+                    norm_layer=norm_layer,
+                )
+                for _ in range(e_depth)
+            ]
+        )
 
-        self.merged_blocks = nn.ModuleList([
-            Block(2 * embed_dim, merged_num_heads, mlp_ratio, qkv_bias=True, norm_layer=norm_layer)
-            for _ in range(merged_depth)
-        ]) # Attention blocks for merged spectra and images
+        self.merged_blocks = nn.ModuleList(
+            [
+                Block(
+                    2 * embed_dim,
+                    merged_num_heads,
+                    mlp_ratio,
+                    qkv_bias=True,
+                    norm_layer=norm_layer,
+                )
+                for _ in range(merged_depth)
+            ]
+        )  # Attention blocks for merged spectra and images
         self.norm = norm_layer(embed_dim)
         self.merged_norm = norm_layer(2 * embed_dim)
         # --------------------------------------------------------------------------
@@ -128,7 +166,9 @@ class MaskedAutoencoderViT(pl.LightningModule):
         self.spec_mask_token = nn.Parameter(torch.zeros(1, 1, decoder_embed_dim))
         self.img_mask_token = nn.Parameter(torch.zeros(1, 1, decoder_embed_dim))
 
-        self.decoder_pos_embed = nn.Parameter(torch.zeros(1, 10000 + 1, decoder_embed_dim), requires_grad=False)
+        self.decoder_pos_embed = nn.Parameter(
+            torch.zeros(1, 10000 + 1, decoder_embed_dim), requires_grad=False
+        )
 
         # --- decoder image positional embeddings (spatial + channel + modality) ---
         self.register_buffer(
@@ -136,23 +176,36 @@ class MaskedAutoencoderViT(pl.LightningModule):
             self._build_fixed_channel_embed(self.num_img_channels, decoder_embed_dim),
             persistent=False,
         )
-        self.decoder_img_modality_embed = nn.Parameter(torch.zeros(1, 1, decoder_embed_dim))
+        self.decoder_img_modality_embed = nn.Parameter(
+            torch.zeros(1, 1, decoder_embed_dim)
+        )
         self.register_buffer(
             "decoder_img_spatial_pos_embed",
             get_2d_sincos_pos_embed(decoder_embed_dim, img_grid_size, img_grid_size),
             persistent=False,
         )
 
-        self.decoder_blocks = nn.ModuleList([
-            Block(decoder_embed_dim, decoder_num_heads, mlp_ratio, qkv_bias=True, norm_layer=norm_layer)
-            for _ in range(decoder_depth)
-        ])
+        self.decoder_blocks = nn.ModuleList(
+            [
+                Block(
+                    decoder_embed_dim,
+                    decoder_num_heads,
+                    mlp_ratio,
+                    qkv_bias=True,
+                    norm_layer=norm_layer,
+                )
+                for _ in range(decoder_depth)
+            ]
+        )
 
         self.decoder_norm = norm_layer(decoder_embed_dim)
         self.decoder_pred = nn.Sequential(
             nn.Linear(decoder_embed_dim, decoder_MLP_coefficient * decoder_embed_dim),
             nn.GELU(),
-            nn.Linear(decoder_MLP_coefficient * decoder_embed_dim, decoder_MLP_coefficient * decoder_embed_dim),
+            nn.Linear(
+                decoder_MLP_coefficient * decoder_embed_dim,
+                decoder_MLP_coefficient * decoder_embed_dim,
+            ),
             nn.GELU(),
             nn.Linear(decoder_MLP_coefficient * decoder_embed_dim, patch_size),
         )
@@ -160,7 +213,10 @@ class MaskedAutoencoderViT(pl.LightningModule):
         self.decoder_e_estimator = nn.Sequential(
             nn.Linear(decoder_embed_dim, decoder_MLP_coefficient * decoder_embed_dim),
             nn.GELU(),
-            nn.Linear(decoder_MLP_coefficient * decoder_embed_dim, decoder_MLP_coefficient * decoder_embed_dim),
+            nn.Linear(
+                decoder_MLP_coefficient * decoder_embed_dim,
+                decoder_MLP_coefficient * decoder_embed_dim,
+            ),
             nn.GELU(),
             nn.Linear(decoder_MLP_coefficient * decoder_embed_dim, patch_size),
         )
@@ -168,17 +224,29 @@ class MaskedAutoencoderViT(pl.LightningModule):
         self.decoder_pred_img = nn.Sequential(
             nn.Linear(decoder_embed_dim, decoder_MLP_coefficient * decoder_embed_dim),
             nn.GELU(),
-            nn.Linear(decoder_MLP_coefficient * decoder_embed_dim, decoder_MLP_coefficient * decoder_embed_dim),
+            nn.Linear(
+                decoder_MLP_coefficient * decoder_embed_dim,
+                decoder_MLP_coefficient * decoder_embed_dim,
+            ),
             nn.GELU(),
-            nn.Linear(decoder_MLP_coefficient * decoder_embed_dim, self.img_patch * self.img_patch),
+            nn.Linear(
+                decoder_MLP_coefficient * decoder_embed_dim,
+                self.img_patch * self.img_patch,
+            ),
         )
 
         self.decoder_pred_img_e = nn.Sequential(
             nn.Linear(decoder_embed_dim, decoder_MLP_coefficient * decoder_embed_dim),
             nn.GELU(),
-            nn.Linear(decoder_MLP_coefficient * decoder_embed_dim, decoder_MLP_coefficient * decoder_embed_dim),
+            nn.Linear(
+                decoder_MLP_coefficient * decoder_embed_dim,
+                decoder_MLP_coefficient * decoder_embed_dim,
+            ),
             nn.GELU(),
-            nn.Linear(decoder_MLP_coefficient * decoder_embed_dim, self.img_patch * self.img_patch),
+            nn.Linear(
+                decoder_MLP_coefficient * decoder_embed_dim,
+                self.img_patch * self.img_patch,
+            ),
         )
 
         refiner_hidden = 32
@@ -221,16 +289,6 @@ class MaskedAutoencoderViT(pl.LightningModule):
         # Loss function parameters
         self.scatter_term = scatter_term
         self.log_regularizer = log_regularizer
-        self.lam_grad = lam_grad
-        self.lam_curv = lam_curv
-        self.lam_fft = lam_fft
-        self.lam_topk = lam_topk
-        self.topk_frac = topk_frac
-        self.lam_spiky = lam_spiky
-        self.spiky_tau = spiky_tau
-        self.lam_under = lam_under
-        self.lam_sigma_right = lam_sigma_right
-        self.sigma_quantile = sigma_quantile
         self.lam_img_sigma_masked = lam_img_sigma_masked
         self.train_vis_interval_sec = 30 * 60
         self._last_train_vis_time = 0.0
@@ -253,11 +311,17 @@ class MaskedAutoencoderViT(pl.LightningModule):
 
     def initialize_weights(self):
         ###
-        pos_embed = get_1d_sincos_pos_embed(self.pos_embed.shape[-1], 10000, cls_token=True)
+        pos_embed = get_1d_sincos_pos_embed(
+            self.pos_embed.shape[-1], 10000, cls_token=True
+        )
         self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
 
-        decoder_pos_embed = get_1d_sincos_pos_embed(self.decoder_pos_embed.shape[-1], 10000, cls_token=True)
-        self.decoder_pos_embed.data.copy_(torch.from_numpy(decoder_pos_embed).float().unsqueeze(0))
+        decoder_pos_embed = get_1d_sincos_pos_embed(
+            self.decoder_pos_embed.shape[-1], 10000, cls_token=True
+        )
+        self.decoder_pos_embed.data.copy_(
+            torch.from_numpy(decoder_pos_embed).float().unsqueeze(0)
+        )
         ### freeze sin cos PE
 
         # initialization
@@ -281,7 +345,9 @@ class MaskedAutoencoderViT(pl.LightningModule):
 
     def _build_fixed_channel_embed(self, num_channels, embed_dim):
         if embed_dim % 2 != 0:
-            raise ValueError(f"embed_dim must be even for fixed channel embeddings, got {embed_dim}")
+            raise ValueError(
+                f"embed_dim must be even for fixed channel embeddings, got {embed_dim}"
+            )
         channel_ids = torch.arange(num_channels, dtype=torch.float32).unsqueeze(1)
         dim_half = embed_dim // 2
         omega = torch.arange(dim_half, dtype=torch.float32)
@@ -306,7 +372,9 @@ class MaskedAutoencoderViT(pl.LightningModule):
         channel = self.img_channel_embed.to(device=device, dtype=dtype)
         channel = channel.unsqueeze(1).expand(-1, self.num_img_spatial, -1)
 
-        img_pos = (spatial + channel).reshape(1, self.num_img_channels * self.num_img_spatial, -1)
+        img_pos = (spatial + channel).reshape(
+            1, self.num_img_channels * self.num_img_spatial, -1
+        )
         return img_pos
 
     def get_decoder_image_pos_embed(self, dtype, device):
@@ -316,7 +384,9 @@ class MaskedAutoencoderViT(pl.LightningModule):
         channel = self.decoder_img_channel_embed.to(device=device, dtype=dtype)
         channel = channel.unsqueeze(1).expand(-1, self.num_img_spatial, -1)
 
-        img_pos = (spatial + channel).reshape(1, self.num_img_channels * self.num_img_spatial, -1)
+        img_pos = (spatial + channel).reshape(
+            1, self.num_img_channels * self.num_img_spatial, -1
+        )
         return img_pos
 
     def _continuous_2d_sincos(self, xy_patch_units, embed_dim, dtype, device):
@@ -331,7 +401,10 @@ class MaskedAutoencoderViT(pl.LightningModule):
         omega = 1.0 / (10000.0 ** (omega / dim_each))
         out_x = x * omega.unsqueeze(0)
         out_y = y * omega.unsqueeze(0)
-        return torch.cat([torch.sin(out_x), torch.cos(out_x), torch.sin(out_y), torch.cos(out_y)], dim=-1)
+        return torch.cat(
+            [torch.sin(out_x), torch.cos(out_x), torch.sin(out_y), torch.cos(out_y)],
+            dim=-1,
+        )
 
     def _build_relative_patch_coords(self, xy_pix, dtype, device):
         # Returns relative coords of image patch to centre patch in patch units
@@ -339,8 +412,12 @@ class MaskedAutoencoderViT(pl.LightningModule):
         p_h, p_w = self.patch_embedimg.patch_size
         H, W = self.patch_embedimg.img_size
 
-        row_centers = torch.arange(gh, device=device, dtype=dtype) * p_h + (p_h - 1) / 2.0
-        col_centers = torch.arange(gw, device=device, dtype=dtype) * p_w + (p_w - 1) / 2.0
+        row_centers = (
+            torch.arange(gh, device=device, dtype=dtype) * p_h + (p_h - 1) / 2.0
+        )
+        col_centers = (
+            torch.arange(gw, device=device, dtype=dtype) * p_w + (p_w - 1) / 2.0
+        )
 
         x_centers = col_centers - (W - 1) / 2.0
         y_centers = (H - 1) / 2.0 - row_centers
@@ -358,7 +435,9 @@ class MaskedAutoencoderViT(pl.LightningModule):
         p_h, p_w = self.patch_embedimg.patch_size
         x = tokens.view(B, self.num_img_channels, gh * gw, p_h * p_w)
         x = x.view(B, self.num_img_channels, gh, gw, p_h, p_w)
-        x = x.permute(0, 1, 2, 4, 3, 5).reshape(B, self.num_img_channels, gh * p_h, gw * p_w)
+        x = x.permute(0, 1, 2, 4, 3, 5).reshape(
+            B, self.num_img_channels, gh * p_h, gw * p_w
+        )
         return x
 
     def _image_to_img_tokens(self, img):
@@ -366,7 +445,9 @@ class MaskedAutoencoderViT(pl.LightningModule):
         gh, gw = self.patch_embedimg.grid_size
         p_h, p_w = self.patch_embedimg.patch_size
         x = img.view(B, self.num_img_channels, gh, p_h, gw, p_w)
-        x = x.permute(0, 1, 2, 4, 3, 5).reshape(B, self.num_img_channels, gh * gw, p_h * p_w)
+        x = x.permute(0, 1, 2, 4, 3, 5).reshape(
+            B, self.num_img_channels, gh * gw, p_h * p_w
+        )
         return x.reshape(B, self.num_patchesimg, p_h * p_w)
 
     def _refine_img_tokens(self, tokens, refiner):
@@ -376,9 +457,9 @@ class MaskedAutoencoderViT(pl.LightningModule):
 
     def _restore_masked_tokens(self, visible_tokens, keep_mask, mask_token):
         B = visible_tokens.shape[0]
-        full_tokens = mask_token.to(dtype=visible_tokens.dtype, device=visible_tokens.device).repeat(
-            B, keep_mask.numel(), 1
-        )
+        full_tokens = mask_token.to(
+            dtype=visible_tokens.dtype, device=visible_tokens.device
+        ).repeat(B, keep_mask.numel(), 1)
         keep_idx = keep_mask.nonzero(as_tuple=False).squeeze(1)
         full_tokens[:, keep_idx, :] = visible_tokens
         return full_tokens
@@ -392,21 +473,39 @@ class MaskedAutoencoderViT(pl.LightningModule):
         xy_grid_y = (img_center - xy_pix[:, 1]) / self.img_patch
         xy_grid = torch.stack([xy_grid_x, xy_grid_y], dim=-1)
 
-        xy_pe = self._continuous_2d_sincos(xy_grid, self.hparams.embed_dim, s.dtype, s.device).unsqueeze(1)
+        xy_pe = self._continuous_2d_sincos(
+            xy_grid, self.hparams.embed_dim, s.dtype, s.device
+        ).unsqueeze(1)
 
         s = s + xy_pe
         e = e + xy_pe
 
-        rel_coords = self._build_relative_patch_coords(xy_pix, dtype=img.dtype, device=img.device)
+        rel_coords = self._build_relative_patch_coords(
+            xy_pix, dtype=img.dtype, device=img.device
+        )
         coord_emb = self.coord_mlp(rel_coords)
-        img = torch.cat([self.patch_embedimg(img[:, i:i + 1]) + coord_emb for i in range(img.size(1))], dim=1)
-        img_e = torch.cat([self.patch_embedimg(img_e[:, i:i + 1]) + coord_emb for i in range(img_e.size(1))], dim=1)
+        img = torch.cat(
+            [
+                self.patch_embedimg(img[:, i : i + 1]) + coord_emb
+                for i in range(img.size(1))
+            ],
+            dim=1,
+        )
+        img_e = torch.cat(
+            [
+                self.patch_embedimg(img_e[:, i : i + 1]) + coord_emb
+                for i in range(img_e.size(1))
+            ],
+            dim=1,
+        )
 
         img_pos_embed = self.get_image_pos_embed(dtype=img.dtype, device=img.device)
         img = img + img_pos_embed + self.img_modality_embed.to(dtype=img.dtype)
         img_e = img_e + img_pos_embed + self.img_e_modality_embed.to(dtype=img_e.dtype)
 
-        deredshifted_start_indices, deredshifted_end_indices = generate_rest_indices(s, z, patch_size=self.patch_size)
+        deredshifted_start_indices, deredshifted_end_indices = generate_rest_indices(
+            s, z, patch_size=self.patch_size
+        )
         pos_table = self.pos_embed[:, 1:, :].squeeze(0)
         pe_start = pos_table[deredshifted_start_indices]
         pe_end = pos_table[deredshifted_end_indices]
@@ -477,8 +576,8 @@ class MaskedAutoencoderViT(pl.LightningModule):
     def forward_decoder(self, x, token_mask, z, xy_pix):
         x = self.decoder_embed(x)
 
-        spec_mask = token_mask[:-self.num_patchesimg].bool()
-        img_mask = token_mask[-self.num_patchesimg:].bool()
+        spec_mask = token_mask[: -self.num_patchesimg].bool()
+        img_mask = token_mask[-self.num_patchesimg :].bool()
 
         spec_keep = ~spec_mask
         img_keep = ~img_mask
@@ -486,8 +585,12 @@ class MaskedAutoencoderViT(pl.LightningModule):
         x_spec_visible = x[:, :num_spec_visible, :]
         x_img_visible = x[:, num_spec_visible:, :]
 
-        x_spec = self._restore_masked_tokens(x_spec_visible, spec_keep, self.spec_mask_token)
-        x_img = self._restore_masked_tokens(x_img_visible, img_keep, self.img_mask_token)
+        x_spec = self._restore_masked_tokens(
+            x_spec_visible, spec_keep, self.spec_mask_token
+        )
+        x_img = self._restore_masked_tokens(
+            x_img_visible, img_keep, self.img_mask_token
+        )
         x = torch.cat([x_spec, x_img], dim=1)
 
         B, _, _ = x.shape
@@ -495,18 +598,18 @@ class MaskedAutoencoderViT(pl.LightningModule):
         right_tokens = self.spec_mask_token.repeat(B, self.right_patches, 1)
 
         cls_token = x[:, :1, :]
-        main_seq = x[:, 1:-self.num_patchesimg, :]
-        img_seq = x[:, -self.num_patchesimg:, :]
+        main_seq = x[:, 1 : -self.num_patchesimg, :]
+        img_seq = x[:, -self.num_patchesimg :, :]
         padded_seq = torch.cat([left_tokens, main_seq, right_tokens, img_seq], dim=1)
         x = torch.cat([cls_token, padded_seq], dim=1)
 
         pos_table = self.decoder_pos_embed[:, 1:, :].squeeze(0)
 
         spec_len = x.shape[1] - 1 - self.num_patchesimg
-        x_spec = x[:, 1:1 + spec_len, :]
-        x_img = x[:, -self.num_patchesimg:, :]
+        x_spec = x[:, 1 : 1 + spec_len, :]
+        x_img = x[:, -self.num_patchesimg :, :]
 
-        x_for_pe = x[:, :1 + spec_len, :]
+        x_for_pe = x[:, : 1 + spec_len, :]
         deredshifted_start_indices, deredshifted_end_indices = generate_rest_indices(
             x_for_pe,
             z,
@@ -521,13 +624,24 @@ class MaskedAutoencoderViT(pl.LightningModule):
         xy_grid_x = (xy_pix[:, 0] + img_center) / self.img_patch
         xy_grid_y = (img_center - xy_pix[:, 1]) / self.img_patch
         xy_grid = torch.stack([xy_grid_x, xy_grid_y], dim=-1)
-        xy_pe = self._continuous_2d_sincos(xy_grid, self.hparams.decoder_embed_dim, x.dtype, x.device).unsqueeze(1)
+        xy_pe = self._continuous_2d_sincos(
+            xy_grid, self.hparams.decoder_embed_dim, x.dtype, x.device
+        ).unsqueeze(1)
         x_spec = x_spec + xy_pe
 
         img_pos = self.get_decoder_image_pos_embed(dtype=x.dtype, device=x.device)
-        rel_coords = self._build_relative_patch_coords(xy_pix, dtype=x.dtype, device=x.device)
-        coord_emb = self.decoder_coord_mlp(rel_coords).repeat(1, self.num_img_channels, 1)
-        x_img = x_img + img_pos + self.decoder_img_modality_embed.to(dtype=x.dtype) + coord_emb
+        rel_coords = self._build_relative_patch_coords(
+            xy_pix, dtype=x.dtype, device=x.device
+        )
+        coord_emb = self.decoder_coord_mlp(rel_coords).repeat(
+            1, self.num_img_channels, 1
+        )
+        x_img = (
+            x_img
+            + img_pos
+            + self.decoder_img_modality_embed.to(dtype=x.dtype)
+            + coord_emb
+        )
 
         x = torch.cat([x[:, :1, :], x_spec, x_img], dim=1)
 
@@ -535,10 +649,10 @@ class MaskedAutoencoderViT(pl.LightningModule):
             x = blk(x)
         x = self.decoder_norm(x)
 
-        s = self.decoder_pred(x[:, :-self.num_patchesimg, :])
-        e = self.decoder_e_estimator(x[:, :-self.num_patchesimg, :])
-        img = self.decoder_pred_img(x[:, -self.num_patchesimg:, :])
-        img_e = self.decoder_pred_img_e(x[:, -self.num_patchesimg:, :])
+        s = self.decoder_pred(x[:, : -self.num_patchesimg, :])
+        e = self.decoder_e_estimator(x[:, : -self.num_patchesimg, :])
+        img = self.decoder_pred_img(x[:, -self.num_patchesimg :, :])
+        img_e = self.decoder_pred_img_e(x[:, -self.num_patchesimg :, :])
         img = self._refine_img_tokens(img, self.decoder_img_refiner)
         img_e = self._refine_img_tokens(img_e, self.decoder_img_e_refiner)
 
@@ -553,41 +667,65 @@ class MaskedAutoencoderViT(pl.LightningModule):
         latent, token_mask = self.forward_encoder(
             spec, error, img, error_img, z, xy_pix, self.mask_ratio, self.chunk_size
         )
-        pred, error, pred_img, error_img = self.forward_decoder(latent, token_mask, z, xy_pix)
+        pred, error, pred_img, error_img = self.forward_decoder(
+            latent, token_mask, z, xy_pix
+        )
 
         offset = self.left_patches * self.patch_size
+        spec_mask = token_mask[: -self.num_patchesimg].long()
+        if spec_mask.numel() == self.num_patches1d + 1:
+            spec_mask = spec_mask[1:]
+
+        if self.left_patches > 0 or self.right_patches > 0:
+            spec_mask = torch.cat(
+                [
+                    torch.zeros(
+                        self.left_patches,
+                        device=spec_mask.device,
+                        dtype=spec_mask.dtype,
+                    ),
+                    spec_mask,
+                    torch.zeros(
+                        self.right_patches,
+                        device=spec_mask.device,
+                        dtype=spec_mask.dtype,
+                    ),
+                ],
+                dim=0,
+            )
+
+        spec_mask = spec_mask.repeat_interleave(self.patch_size)[
+            offset : offset + self.spec_dim
+        ]
         spec_loss, img_loss, total_loss = forward_loss(
-            pred[:, offset:offset + self.spec_dim],
+            pred[:, offset : offset + self.spec_dim],
             spec,
             weig,
-            error[:, offset:offset + self.spec_dim],
+            error[:, offset : offset + self.spec_dim],
             pred_img,
             img,
             weig_img,
             error_img,
-            token_mask[:-self.num_patchesimg].long(),
-            img_mask=token_mask[-self.num_patchesimg:].long(),
-            num_patches1d=self.num_patches1d,
-            left_patches=self.left_patches,
-            patch_size=self.patch_size,
+            spec_mask=spec_mask,
+            img_mask=token_mask[-self.num_patchesimg :].long(),
             img_patch=self.img_patch,
             num_img_channels=self.num_img_channels,
             num_img_patches=self.patch_embedimg.num_patches,
             weight=self.scatter_term,
             regularizer=self.log_regularizer,
-            lam_grad=self.lam_grad,
-            lam_curv=self.lam_curv,
-            lam_topk=self.lam_topk,
-            lam_fft=self.lam_fft,
-            topk_frac=self.topk_frac,
-            lam_spiky=self.lam_spiky,
-            spiky_tau=self.spiky_tau,
-            lam_under=self.lam_under,
-            lam_sigma_right=self.lam_sigma_right,
             lam_img_sigma_masked=self.lam_img_sigma_masked,
         )
-        return spec_loss, img_loss, total_loss, pred, error, pred_img, error_img, token_mask
-        
+        return (
+            spec_loss,
+            img_loss,
+            total_loss,
+            pred,
+            error,
+            pred_img,
+            error_img,
+            token_mask,
+        )
+
     def training_step(self, batch, batch_idx):
         zero_loss = sum((p.sum() * 0.0) for p in self.parameters() if p.requires_grad)
 
@@ -601,32 +739,61 @@ class MaskedAutoencoderViT(pl.LightningModule):
             mask_ratio_img = 0.9
         self.mask_ratio_img = mask_ratio_img
         x, spec, weig, error, img, img_w, img_e, z, xy_pix = batch
-        spec_loss, img_loss, total_loss, spec_pred, error_pred, pred_img, error_img, token_mask = self.forward(
-            spec, weig, error, img, img_w, img_e, z, xy_pix
-        )
+        (
+            spec_loss,
+            img_loss,
+            total_loss,
+            spec_pred,
+            error_pred,
+            pred_img,
+            error_img,
+            token_mask,
+        ) = self.forward(spec, weig, error, img, img_w, img_e, z, xy_pix)
 
         if not torch.isfinite(total_loss):
             print(f"Non-finite loss at step {batch_idx}; using zero loss")
             return zero_loss
 
-        self.log("train_loss", total_loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log(
+            "train_loss",
+            total_loss,
+            on_step=True,
+            on_epoch=True,
+            prog_bar=True,
+            sync_dist=True,
+        )
 
         # Trigger training visualizations by wall clock (roughly every 30 minutes).
         if getattr(self.trainer, "is_global_zero", False):
             now = time.time()
             if now - self._last_train_vis_time >= self.train_vis_interval_sec:
                 token_mask_b = token_mask.unsqueeze(0).expand(spec.size(0), -1)
-                mask_spec = token_mask_b[:, :-self.num_patchesimg].long()
-                mask_img = token_mask_b[:, -self.num_patchesimg:].long()
+                mask_spec = token_mask_b[:, : -self.num_patchesimg].long()
+                mask_img = token_mask_b[:, -self.num_patchesimg :].long()
                 i_vis = min(4, spec.size(0) - 1)
-                visualize(self, spec, error, spec_pred, error_pred, img, img_e, pred_img, error_img, mask_spec, mask_img, i=i_vis)
+                visualize(
+                    self,
+                    spec,
+                    error,
+                    spec_pred,
+                    error_pred,
+                    img,
+                    img_e,
+                    pred_img,
+                    error_img,
+                    mask_spec,
+                    mask_img,
+                    i=i_vis,
+                )
                 self._last_train_vis_time = now
 
         if batch_idx % 50 == 0:
             self.log("chunk_size", self.chunk_size)
             self.log("mask_ratio", self.mask_ratio)
             self.log("mask_ratio_img", self.mask_ratio_img)
-            self.log("spec_loss", spec_loss, on_step=True, on_epoch=False, sync_dist=True)
+            self.log(
+                "spec_loss", spec_loss, on_step=True, on_epoch=False, sync_dist=True
+            )
             self.log("img_loss", img_loss, on_step=True, on_epoch=False, sync_dist=True)
             self.log("grad_norm", self._grad_norm(), on_step=True, on_epoch=False)
         return total_loss
@@ -642,19 +809,60 @@ class MaskedAutoencoderViT(pl.LightningModule):
         self.mask_ratio_img = mask_ratio_img
 
         x, spec, weig, error, img, img_w, img_e, z, xy_pix = batch
-        spec_loss, img_loss, total_loss, spec_pred, error_pred, pred_img, error_img, token_mask = self.forward(
-            spec, weig, error, img, img_w, img_e, z, xy_pix
-        )
+        (
+            spec_loss,
+            img_loss,
+            total_loss,
+            spec_pred,
+            error_pred,
+            pred_img,
+            error_img,
+            token_mask,
+        ) = self.forward(spec, weig, error, img, img_w, img_e, z, xy_pix)
 
-        self.log("val_loss", total_loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
-        self.log("val_spec_loss", spec_loss, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
-        self.log("val_img_loss", img_loss, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
+        self.log(
+            "val_loss",
+            total_loss,
+            on_step=True,
+            on_epoch=True,
+            prog_bar=True,
+            sync_dist=True,
+        )
+        self.log(
+            "val_spec_loss",
+            spec_loss,
+            on_step=True,
+            on_epoch=True,
+            prog_bar=False,
+            sync_dist=True,
+        )
+        self.log(
+            "val_img_loss",
+            img_loss,
+            on_step=True,
+            on_epoch=True,
+            prog_bar=False,
+            sync_dist=True,
+        )
 
         if batch_idx == 0:
             token_mask = token_mask.unsqueeze(0).expand(spec.size(0), -1)
-            mask_spec = token_mask[:, :-self.num_patchesimg].long()
-            mask_img = token_mask[:, -self.num_patchesimg:].long()
-            visualize(self, spec, error, spec_pred, error_pred, img, img_e, pred_img, error_img, mask_spec, mask_img, i=4)
+            mask_spec = token_mask[:, : -self.num_patchesimg].long()
+            mask_img = token_mask[:, -self.num_patchesimg :].long()
+            visualize(
+                self,
+                spec,
+                error,
+                spec_pred,
+                error_pred,
+                img,
+                img_e,
+                pred_img,
+                error_img,
+                mask_spec,
+                mask_img,
+                i=4,
+            )
 
         return total_loss
 
@@ -689,11 +897,13 @@ class MaskedAutoencoderViT(pl.LightningModule):
             raise ValueError("probs length must match patch_sizes length")
 
         idx = random.choices(range(len(patch_sizes)), weights=probs, k=1)[0]
-        
+
         return patch_sizes[idx], mask_ratios[idx]
 
     def _grad_norm(self):
-        norms = [p.grad.detach().norm(2) for p in self.parameters() if p.grad is not None]
+        norms = [
+            p.grad.detach().norm(2) for p in self.parameters() if p.grad is not None
+        ]
         if not norms:
             return 0.0
         return torch.stack(norms).norm(2).item()
@@ -703,7 +913,9 @@ class MaskedAutoencoderViT(pl.LightningModule):
 
         # Use a fixed full-training horizon (self.max_epochs), even when running
         # one-epoch chained jobs with a smaller trainer.max_epochs.
-        est_total_steps = int(getattr(self.trainer, "estimated_stepping_batches", self.max_epochs))
+        est_total_steps = int(
+            getattr(self.trainer, "estimated_stepping_batches", self.max_epochs)
+        )
         trainer_epochs = max(1, int(getattr(self.trainer, "max_epochs", 1)))
         steps_per_epoch = max(1, est_total_steps // trainer_epochs)
 

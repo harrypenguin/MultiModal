@@ -1,3 +1,5 @@
+"""Dataset and dataloader utilities for multimodal DESI data."""
+
 import numpy as np
 import random
 import math
@@ -17,7 +19,9 @@ class ContiguousDistributedSampler(Sampler):
 
     def _rank_world_size(self):
         if torch.distributed.is_available() and torch.distributed.is_initialized():
-            return int(torch.distributed.get_rank()), int(torch.distributed.get_world_size())
+            return int(torch.distributed.get_rank()), int(
+                torch.distributed.get_world_size()
+            )
         return 0, 1
 
     def _num_samples(self, world_size):
@@ -53,6 +57,7 @@ class ContiguousDistributedSampler(Sampler):
         _, world_size = self._rank_world_size()
         return self._num_samples(world_size)
 
+
 def get_extreme_mask(spectra: np.ndarray, ivar: np.ndarray) -> np.ndarray:
     """
     Returns a boolean mask where:
@@ -61,24 +66,24 @@ def get_extreme_mask(spectra: np.ndarray, ivar: np.ndarray) -> np.ndarray:
     - spectra or ivar are NaN or inf
     """
     return (
-        ~np.isfinite(spectra) |
-        ~np.isfinite(ivar) |
-        (np.abs(spectra) > 100) |
-        (ivar < 1e-5)
+        ~np.isfinite(spectra)
+        | ~np.isfinite(ivar)
+        | (np.abs(spectra) > 100)
+        | (ivar < 1e-5)
     )
 
 
 class MultimodalDataset(Dataset):
     def __init__(self, path, start=0, end=None, augment=False, max_shift=50):
-        self.data = zarr.open(path, mode='r')
-        self.flux = self.data['FLUX']
-        self.ivar = self.data['IVAR']
-        self.img = self.data['IMG']
-        self.img_ivar = self.data['IMG_IVAR']
+        self.data = zarr.open(path, mode="r")
+        self.flux = self.data["FLUX"]
+        self.ivar = self.data["IVAR"]
+        self.img = self.data["IMG"]
+        self.img_ivar = self.data["IMG_IVAR"]
 
         p = pandas.read_parquet(
-            '/pscratch/sd/p/pzehao/iron/desi_zcat_maglim_19_5.parquet',
-            columns=['Z', 'TARGET_RA', 'TARGET_DEC', 'MEAN_FIBER_RA', 'MEAN_FIBER_DEC'],
+            "/pscratch/sd/p/pzehao/iron/desi_zcat_maglim_19_5.parquet",
+            columns=["Z", "TARGET_RA", "TARGET_DEC", "MEAN_FIBER_RA", "MEAN_FIBER_DEC"],
         )
 
         n_total = int(self.flux.shape[0])
@@ -87,25 +92,27 @@ class MultimodalDataset(Dataset):
         self.end = min(self.end, n_total)
 
         if self.start < 0 or self.start >= self.end:
-            raise ValueError(f"Invalid range: start={self.start}, end={self.end}, total={n_total}")
+            raise ValueError(
+                f"Invalid range: start={self.start}, end={self.end}, total={n_total}"
+            )
 
         sl = slice(self.start, self.end)
 
         self.augment = augment
         self.max_shift = max_shift
 
-        self.redshift = p['Z'].iloc[sl].values.astype(np.float32)
-        target_ra = p['TARGET_RA'].iloc[sl].values.astype(np.float32)
-        target_dec = p['TARGET_DEC'].iloc[sl].values.astype(np.float32)
-        fibre_ra = p['MEAN_FIBER_RA'].iloc[sl].values.astype(np.float32)
-        fibre_dec = p['MEAN_FIBER_DEC'].iloc[sl].values.astype(np.float32)
+        self.redshift = p["Z"].iloc[sl].values.astype(np.float32)
+        target_ra = p["TARGET_RA"].iloc[sl].values.astype(np.float32)
+        target_dec = p["TARGET_DEC"].iloc[sl].values.astype(np.float32)
+        fibre_ra = p["MEAN_FIBER_RA"].iloc[sl].values.astype(np.float32)
+        fibre_dec = p["MEAN_FIBER_DEC"].iloc[sl].values.astype(np.float32)
 
         # Hardcoding values from Biprateep
         pix_scale_arcsec = 0.262
         arcsec_per_deg = 3600.0
 
-        dra_deg = (fibre_ra - target_ra)
-        ddec_deg = (fibre_dec - target_dec)
+        dra_deg = fibre_ra - target_ra
+        ddec_deg = fibre_dec - target_dec
         dra_deg *= np.cos(np.deg2rad(target_dec))
 
         dx_arcsec = dra_deg * arcsec_per_deg
@@ -161,7 +168,9 @@ class MultimodalDataset(Dataset):
             img_error = 1.0 / np.sqrt(img_ivar + 1e-6)
 
             z = np.float32(self.redshift[local_idx])
-            xy_pix = np.array([self.dx_pix[local_idx], self.dy_pix[local_idx]], dtype=np.float32)
+            xy_pix = np.array(
+                [self.dx_pix[local_idx], self.dy_pix[local_idx]], dtype=np.float32
+            )
 
             if self.augment and self.max_shift > 0:
                 dx = np.random.randint(-self.max_shift, self.max_shift + 1)
@@ -221,8 +230,9 @@ class AugmentedSubset(Dataset):
 
         return x, spec, ivar, error, img, img_ivar, img_error, z, xy_pix
 
+
 def CreateMultimodalDataLoadersIter(
-    path='/pscratch/sd/p/pzehao/iron/desi_maglim_19_5.zarr',
+    path="/pscratch/sd/p/pzehao/iron/desi_maglim_19_5.zarr",
     end=1000000,
     train_size=700000,
     val_size=None,
@@ -230,7 +240,7 @@ def CreateMultimodalDataLoadersIter(
     batch_size=16,
     augment_train=True,
     max_shift=50,
-    train_index_mode='random',
+    train_index_mode="random",
     train_block_size=100,
     train_interleave_groups=4,
     train_interleave_span=1,
@@ -240,13 +250,15 @@ def CreateMultimodalDataLoadersIter(
     train_cycle_drop_last=False,
     num_workers=7,
     prefetch_factor=4,
-    distributed_shard_mode='lightning',
+    distributed_shard_mode="lightning",
 ):
     base_dataset = MultimodalDataset(path, start=0, end=end, augment=False, max_shift=0)
 
     total_size = len(base_dataset)
     if train_size > total_size:
-        raise ValueError(f"train_size ({train_size}) exceeds dataset size ({total_size})")
+        raise ValueError(
+            f"train_size ({train_size}) exceeds dataset size ({total_size})"
+        )
 
     remaining = total_size - train_size
     if val_size is None and test_size is None:
@@ -261,7 +273,9 @@ def CreateMultimodalDataLoadersIter(
     test_size = int(test_size)
 
     if val_size < 0 or test_size < 0:
-        raise ValueError(f"val_size and test_size must be non-negative (got val_size={val_size}, test_size={test_size})")
+        raise ValueError(
+            f"val_size and test_size must be non-negative (got val_size={val_size}, test_size={test_size})"
+        )
     if train_size + val_size + test_size != total_size:
         raise ValueError(
             f"Split sizes must sum to dataset size ({total_size}), got "
@@ -279,21 +293,21 @@ def CreateMultimodalDataLoadersIter(
 
         interleaved = []
         for group_start in range(0, len(blocks), group_count):
-            group = blocks[group_start:group_start + group_count]
+            group = blocks[group_start : group_start + group_count]
             max_len = max(len(block) for block in group)
             for offset in range(0, max_len, span):
                 for block in group:
                     if offset < len(block):
-                        interleaved.extend(block[offset:offset + span])
+                        interleaved.extend(block[offset : offset + span])
         return interleaved
 
-    if train_index_mode == 'random':
+    if train_index_mode == "random":
         pass
-    elif train_index_mode in ('block_shuffle', 'interleave'):
+    elif train_index_mode in ("block_shuffle", "interleave"):
         if train_block_size <= 0:
             raise ValueError(f"train_block_size must be > 0 (got {train_block_size})")
 
-        if train_index_mode == 'interleave':
+        if train_index_mode == "interleave":
             if train_interleave_groups <= 0:
                 raise ValueError(
                     f"train_interleave_groups must be > 0 (got {train_interleave_groups})"
@@ -306,11 +320,14 @@ def CreateMultimodalDataLoadersIter(
         # Improve Zarr locality: keep contiguous indices within blocks while
         # still randomizing block order to preserve sample mixing.
         train_idx = sorted(train_idx)
-        blocks = [train_idx[i:i + train_block_size] for i in range(0, len(train_idx), train_block_size)]
+        blocks = [
+            train_idx[i : i + train_block_size]
+            for i in range(0, len(train_idx), train_block_size)
+        ]
         py_rng = random.Random(130)
         py_rng.shuffle(blocks)
 
-        if train_index_mode == 'block_shuffle':
+        if train_index_mode == "block_shuffle":
             train_idx = [idx for block in blocks for idx in block]
         else:
             train_idx = _interleave_blocks(
@@ -327,13 +344,17 @@ def CreateMultimodalDataLoadersIter(
     if train_subset_size is not None:
         train_subset_size = int(train_subset_size)
 
-    if train_subset_size is not None and train_subset_size > 0 and train_subset_size < len(train_idx):
+    if (
+        train_subset_size is not None
+        and train_subset_size > 0
+        and train_subset_size < len(train_idx)
+    ):
         cycle_epoch = int(train_cycle_epoch)
         cycle_epoch = max(0, cycle_epoch)
 
         # Rotate subset-window order by epoch while keeping full-epoch coverage.
         windows = [
-            train_idx[i:i + train_subset_size]
+            train_idx[i : i + train_subset_size]
             for i in range(0, len(train_idx), train_subset_size)
         ]
 
@@ -355,11 +376,15 @@ def CreateMultimodalDataLoadersIter(
     test_idx = perm[val_end:]
 
     train_subset = Subset(base_dataset, train_idx)
-    train_dataset = AugmentedSubset(train_subset, max_shift=max_shift) if augment_train else train_subset
+    train_dataset = (
+        AugmentedSubset(train_subset, max_shift=max_shift)
+        if augment_train
+        else train_subset
+    )
     val_dataset = Subset(base_dataset, val_idx)
     test_dataset = Subset(base_dataset, test_idx)
 
-    if distributed_shard_mode not in ('lightning', 'contiguous'):
+    if distributed_shard_mode not in ("lightning", "contiguous"):
         raise ValueError(
             f"Unsupported distributed_shard_mode '{distributed_shard_mode}'. "
             "Expected one of: ['lightning', 'contiguous']"
@@ -388,12 +413,12 @@ def CreateMultimodalDataLoadersIter(
         if subset_active:
             shuffle_train = False
         else:
-            shuffle_train = (train_index_mode == 'random')
+            shuffle_train = train_index_mode == "random"
 
     train_sampler = None
     val_sampler = None
     test_sampler = None
-    if distributed_shard_mode == 'contiguous':
+    if distributed_shard_mode == "contiguous":
         train_sampler = ContiguousDistributedSampler(train_dataset, drop_last=False)
         val_sampler = ContiguousDistributedSampler(val_dataset, drop_last=False)
         test_sampler = ContiguousDistributedSampler(test_dataset, drop_last=False)
@@ -421,17 +446,22 @@ def CreateMultimodalDataLoadersIter(
     )
     return train_loader, val_loader, test_loader
 
+
 def safe_collate(batch):
     batch = [x for x in batch if x is not None]
     if len(batch) == 0:
         return None  # will trigger skip in training loop
     return torch.utils.data.default_collate(batch)
 
-def generate_rest_indices(s: torch.Tensor, z: float, 
-                          lambda_min_obs: float = 3600.0,
-                          lambda_step_obs: float = 0.8,
-                          patch_size: int = 31,
-                          lambda_max_rest: float = 10000.0):
+
+def generate_rest_indices(
+    s: torch.Tensor,
+    z: float,
+    lambda_min_obs: float = 3600.0,
+    lambda_step_obs: float = 0.8,
+    patch_size: int = 31,
+    lambda_max_rest: float = 10000.0,
+):
     """
     Generates rest-frame start and end indices for each spectral patch.
 
@@ -452,10 +482,14 @@ def generate_rest_indices(s: torch.Tensor, z: float,
     z = z.unsqueeze(1)
 
     # Patch indices: 0 to num_patches - 1
-    patch_indices = torch.arange(num_patches, device=s.device).unsqueeze(0).repeat(B, 1)  # (B, num_patches)
+    patch_indices = (
+        torch.arange(num_patches, device=s.device).unsqueeze(0).repeat(B, 1)
+    )  # (B, num_patches)
 
     # Observed-frame wavelengths
-    lambda_start_obs = lambda_min_obs + patch_indices * patch_size * lambda_step_obs  # (B, num_patches)
+    lambda_start_obs = (
+        lambda_min_obs + patch_indices * patch_size * lambda_step_obs
+    )  # (B, num_patches)
     lambda_end_obs = lambda_start_obs + (patch_size - 1) * lambda_step_obs  # inclusive
 
     # Convert to rest-frame
@@ -467,6 +501,7 @@ def generate_rest_indices(s: torch.Tensor, z: float,
     rest_end_idx = lambda_end_rest.round().long().clamp(0, int(lambda_max_rest) - 1)
 
     return rest_start_idx, rest_end_idx
+
 
 # Spectra smoothing utils from Biprateep
 def get_kernel(nsmooth: int) -> np.ndarray:
@@ -485,14 +520,15 @@ def get_kernel(nsmooth: int) -> np.ndarray:
         return np.array([])
     # The kernel extends to 2*nsmooth on each side of the center, matching the JS implementation.
     x = np.arange(-2 * nsmooth, 2 * nsmooth + 1)
-    kernel = np.exp(-x**2 / (2 * nsmooth**2))
+    kernel = np.exp(-(x**2) / (2 * nsmooth**2))
     return kernel
+
 
 def smooth_data(
     data_in: np.ndarray,
     kernel: np.ndarray,
     ivar_in: np.ndarray = None,
-    ivar_weight: bool = False
+    ivar_weight: bool = False,
 ) -> np.ndarray:
     """
     Smooths data using a provided kernel, with optional inverse variance weighting.
@@ -520,55 +556,45 @@ def smooth_data(
         if ivar_in is None:
             raise ValueError("ivar_in must be provided when ivar_weight is True.")
         if ivar_in.shape != data_in.shape:
-             raise ValueError("ivar_in must have the same shape as data_in.")
+            raise ValueError("ivar_in must have the same shape as data_in.")
         finite_mask &= np.isfinite(ivar_in)
 
     # Use a convolution operation, which is equivalent to the nested loops in JS.
     # The `convolve1d` function from SciPy handles boundary conditions gracefully.
     # `mode='constant'` with `cval=0` mimics the JS behavior of ignoring out-of-bounds pixels.
-    
+
     if ivar_weight:
         # Equivalent to smooth(data*ivar) / smooth(ivar)
         # We multiply by the finite_mask to zero out non-finite values before convolution.
         numerator = convolve1d(
-            (data_in * ivar_in) * finite_mask,
-            kernel,
-            mode='constant',
-            cval=0.0
+            (data_in * ivar_in) * finite_mask, kernel, mode="constant", cval=0.0
         )
         denominator = convolve1d(
-            ivar_in * finite_mask,
-            kernel,
-            mode='constant',
-            cval=0.0
+            ivar_in * finite_mask, kernel, mode="constant", cval=0.0
         )
     else:
         # Equivalent to smooth(data) / smooth(ones)
         # The denominator correctly calculates the sum of kernel weights at each point,
         # accounting for edge effects, just like the JS version.
-        numerator = convolve1d(
-            data_in * finite_mask,
-            kernel,
-            mode='constant',
-            cval=0.0
-        )
+        numerator = convolve1d(data_in * finite_mask, kernel, mode="constant", cval=0.0)
         denominator = convolve1d(
-            finite_mask.astype(float), # convolve with the mask to get the correct weights
+            finite_mask.astype(
+                float
+            ),  # convolve with the mask to get the correct weights
             kernel,
-            mode='constant',
-            cval=0.0
+            mode="constant",
+            cval=0.0,
         )
 
     # To avoid division by zero, set result to 0 where denominator is 0
     smoothed_data = np.zeros_like(data_in)
-    np.divide(numerator, denominator, out=smoothed_data, where=denominator!=0)
+    np.divide(numerator, denominator, out=smoothed_data, where=denominator != 0)
 
     return smoothed_data
 
+
 def smooth_noise(
-    noise_in: np.ndarray,
-    kernel: np.ndarray,
-    ivar_weight: bool = False
+    noise_in: np.ndarray, kernel: np.ndarray, ivar_weight: bool = False
 ) -> np.ndarray:
     """
     Smooths noise or ivar using a provided kernel, propagating errors correctly.
@@ -589,24 +615,21 @@ def smooth_noise(
         return np.copy(noise_in)
 
     finite_mask = np.isfinite(noise_in)
-    
+
     if ivar_weight:
         # Propagating error for a weighted mean:
         # sigma_smooth^2 = sum(K_i^2 * ivar_i) / (sum(K_i * ivar_i))^2
         # We are calculating sigma_smooth.
         numerator_sq = convolve1d(
-            noise_in * finite_mask, # noise_in is ivar here
+            noise_in * finite_mask,  # noise_in is ivar here
             kernel**2,
-            mode='constant',
-            cval=0.0
+            mode="constant",
+            cval=0.0,
         )
         denominator = convolve1d(
-            noise_in * finite_mask,
-            kernel,
-            mode='constant',
-            cval=0.0
+            noise_in * finite_mask, kernel, mode="constant", cval=0.0
         )
-        
+
         # Calculate sqrt(numerator_sq) / denominator
         numerator = np.sqrt(numerator_sq)
     else:
@@ -614,21 +637,18 @@ def smooth_noise(
         # sigma_smooth^2 = sum(K_i^2 * sigma_i^2) / (sum(K_i))^2
         # We are calculating sigma_smooth.
         numerator_sq = convolve1d(
-            (noise_in**2) * finite_mask, # noise_in is sigma here
+            (noise_in**2) * finite_mask,  # noise_in is sigma here
             kernel**2,
-            mode='constant',
-            cval=0.0
+            mode="constant",
+            cval=0.0,
         )
         denominator = convolve1d(
-            finite_mask.astype(float),
-            kernel,
-            mode='constant',
-            cval=0.0
+            finite_mask.astype(float), kernel, mode="constant", cval=0.0
         )
         # Calculate sqrt(numerator_sq) / denominator
         numerator = np.sqrt(numerator_sq)
 
     smoothed_noise = np.zeros_like(noise_in)
-    np.divide(numerator, denominator, out=smoothed_noise, where=denominator!=0)
-    
+    np.divide(numerator, denominator, out=smoothed_noise, where=denominator != 0)
+
     return smoothed_noise

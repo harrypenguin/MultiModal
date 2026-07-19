@@ -1,3 +1,5 @@
+"""Main multimodal pretraining entrypoint."""
+
 import os
 import sys
 
@@ -10,9 +12,8 @@ from lightning.pytorch import seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 
-from models.MAE import MaskedAutoencoderViT
-from utils.DataProcessing import CreateMultimodalDataLoadersIter
-
+from models.mae import MaskedAutoencoderViT
+from utils.data_processing import CreateMultimodalDataLoadersIter
 
 if __name__ == "__main__":
     seed_everything(130, workers=True)
@@ -25,9 +26,10 @@ if __name__ == "__main__":
             torch.backends.cuda.enable_mem_efficient_sdp(True)
             print("Enabled memory-efficient SDPA")
 
-    # train_loader, val_loader, test_loader = CreateMultimodalDataLoadersIter(end=500000, train_size=350000, batch_size=32)
-    train_loader, val_loader, test_loader = CreateMultimodalDataLoadersIter(end=4737442, train_size=4642694, batch_size=32)
-    # train 98%, val 1%, test 1% 
+    train_loader, val_loader, test_loader = CreateMultimodalDataLoadersIter(
+        end=4737442, train_size=4642694, batch_size=32
+    )
+    # train 98%, val 1%, test 1%
 
     lr_monitor = LearningRateMonitor(logging_interval="step")
 
@@ -42,22 +44,17 @@ if __name__ == "__main__":
     )
 
     os.environ["WANDB_DIR"] = os.environ["SCRATCH"]
-    os.environ["WANDB_CACHE_DIR"] = os.path.join(os.environ["SCRATCH"], ".cache", "wandb")
+    os.environ["WANDB_CACHE_DIR"] = os.path.join(
+        os.environ["SCRATCH"], ".cache", "wandb"
+    )
 
     wandb.finish()
 
     logger = WandbLogger(
         project="Production",
-        name="Final Everything",
+        name="Final",
         log_model=True,
     )
-
-    # logger = WandbLogger(
-    #     project="Production",
-    #     id="2gklodik",
-    #     resume="must",
-    #     log_model=True,
-    # )
 
     print(f"W&B dashboard: {logger.experiment.url}")
 
@@ -77,11 +74,43 @@ if __name__ == "__main__":
     )
 
     prob = 0.7 / 14
-    patch_scheme={
-            "patch_sizes": [1, 2, 4, 8, 16, 32, 64, 128, 64, 32, 16, 8, 4, 2, 1],
-            "mask_ratios": [1.0, 13/14, 12/14, 11/14, 10/14, 9/14, 8/14, 7/14, 6/14, 5/14, 4/14, 3/14, 2/14, 1/14, 0.0],
-            "probs": [0.3, prob, prob, prob, prob, prob, prob, prob, prob, prob, prob, prob, prob, prob, prob],
-        }
+    patch_scheme = {
+        "patch_sizes": [1, 2, 4, 8, 16, 32, 64, 128, 64, 32, 16, 8, 4, 2, 1],
+        "mask_ratios": [
+            1.0,
+            13 / 14,
+            12 / 14,
+            11 / 14,
+            10 / 14,
+            9 / 14,
+            8 / 14,
+            7 / 14,
+            6 / 14,
+            5 / 14,
+            4 / 14,
+            3 / 14,
+            2 / 14,
+            1 / 14,
+            0.0,
+        ],
+        "probs": [
+            0.3,
+            prob,
+            prob,
+            prob,
+            prob,
+            prob,
+            prob,
+            prob,
+            prob,
+            prob,
+            prob,
+            prob,
+            prob,
+            prob,
+            prob,
+        ],
+    }
 
     model = MaskedAutoencoderViT(
         spec_dim=7781,
@@ -103,6 +132,4 @@ if __name__ == "__main__":
         patch_scheme=patch_scheme,
     )
 
-    # ckpt_path = "/pscratch/sd/p/pzehao/DESIMAE/ProductionCheckpoints/epoch=005-val_loss=-12.4041.ckpt"
-    # trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader, ckpt_path=ckpt_path)
     trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)

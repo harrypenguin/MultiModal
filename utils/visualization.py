@@ -1,17 +1,30 @@
+"""Training and validation visualization helpers for W&B logging."""
+
 import numpy as np
 import matplotlib.pyplot as plt
 import wandb
 import torch
 from pytorch_lightning.utilities.rank_zero import rank_zero_only
 
-from utils.DataProcessing import get_kernel, smooth_data
-from utils.AstroImageFunctions import make_rgb
+from utils.data_processing import get_kernel, smooth_data
+from utils.astro_image_functions import make_rgb
 
 
-def visualize(model, spec: torch.Tensor, error: torch.Tensor, spec_pred: torch.Tensor,
-              error_pred: torch.Tensor, img: torch.Tensor, img_error_true: torch.Tensor,
-              pred_img: torch.Tensor, error_img: torch.Tensor, mask_spec: torch.Tensor, mask_img: torch.Tensor,
-              i: int = 0, nsmooth: int = 3):
+def visualize(
+    model,
+    spec: torch.Tensor,
+    error: torch.Tensor,
+    spec_pred: torch.Tensor,
+    error_pred: torch.Tensor,
+    img: torch.Tensor,
+    img_error_true: torch.Tensor,
+    pred_img: torch.Tensor,
+    error_img: torch.Tensor,
+    mask_spec: torch.Tensor,
+    mask_img: torch.Tensor,
+    i: int = 0,
+    nsmooth: int = 3,
+):
     kernel = get_kernel(nsmooth)
 
     # Extract relevant sample
@@ -36,17 +49,35 @@ def visualize(model, spec: torch.Tensor, error: torch.Tensor, spec_pred: torch.T
     fig, ax = plt.subplots(figsize=(10, 3))
     offset = model.left_patches * model.patch_size
     x_range = np.arange(offset, offset + len(target_smooth))
-    ax.plot(x_range, target_smooth, label="Target (smoothed)", color="orange", linewidth=1)
-    ax.fill_between(x_range, data_lower, data_upper, color="orange", alpha=0.3, label="±σ data (smoothed)")
+    ax.plot(
+        x_range, target_smooth, label="Target (smoothed)", color="orange", linewidth=1
+    )
+    ax.fill_between(
+        x_range,
+        data_lower,
+        data_upper,
+        color="orange",
+        alpha=0.3,
+        label="±σ data (smoothed)",
+    )
     ax.plot(pred_mean, label="Prediction", color="blue")
-    ax.fill_between(range(len(pred_mean)), pred_lower, pred_upper, color="blue", alpha=0.3, label="±σ predicted")
+    ax.fill_between(
+        range(len(pred_mean)),
+        pred_lower,
+        pred_upper,
+        color="blue",
+        alpha=0.3,
+        label="±σ predicted",
+    )
     patch_len = model.patch_size
     for j, masked in enumerate(patch_mask_spec):
         if masked:
             start = offset + j * patch_len
             end = offset + (j + 1) * patch_len
-            ax.axvspan(start, end, color='red', alpha=0.05)
-    ax.set_title(f"Patch Size = {model.patch_size*model.chunk_size}, {model.mask_ratio:.2f} (Val Sample {i})")
+            ax.axvspan(start, end, color="red", alpha=0.05)
+    ax.set_title(
+        f"Patch Size = {model.patch_size*model.chunk_size}, {model.mask_ratio:.2f} (Val Sample {i})"
+    )
     ax.set_xlabel("Pixel index")
     ax.set_ylabel("Value")
     ax.set_ylim(-3, 15)
@@ -66,11 +97,23 @@ def visualize(model, spec: torch.Tensor, error: torch.Tensor, spec_pred: torch.T
 
     p = pred_img[i].view(model.num_img_channels, N, model.img_patch, model.img_patch)
     p = p.view(model.num_img_channels, gh, gw, model.img_patch, model.img_patch)
-    pred_img_formatted = p.permute(0, 1, 3, 2, 4).reshape(model.num_img_channels, H, W).detach().cpu().numpy()
+    pred_img_formatted = (
+        p.permute(0, 1, 3, 2, 4)
+        .reshape(model.num_img_channels, H, W)
+        .detach()
+        .cpu()
+        .numpy()
+    )
 
     pe = error_img[i].view(model.num_img_channels, N, model.img_patch, model.img_patch)
     pe = pe.view(model.num_img_channels, gh, gw, model.img_patch, model.img_patch)
-    pred_error_formatted = np.exp(pe.permute(0, 1, 3, 2, 4).reshape(model.num_img_channels, H, W).detach().cpu().numpy())
+    pred_error_formatted = np.exp(
+        pe.permute(0, 1, 3, 2, 4)
+        .reshape(model.num_img_channels, H, W)
+        .detach()
+        .cpu()
+        .numpy()
+    )
 
     img_formatted = img[i].detach().cpu().numpy()
     img_error_formatted = img_error_true[i].detach().cpu().numpy()
@@ -102,8 +145,15 @@ def visualize(model, spec: torch.Tensor, error: torch.Tensor, spec_pred: torch.T
 
     log_images()
 
-    mask_grid = patch_mask_img.float().view(model.num_img_channels, gh, gw).cpu().numpy()
-    rows = [img_formatted, pred_img_formatted, img_error_formatted, pred_error_formatted]
+    mask_grid = (
+        patch_mask_img.float().view(model.num_img_channels, gh, gw).cpu().numpy()
+    )
+    rows = [
+        img_formatted,
+        pred_img_formatted,
+        img_error_formatted,
+        pred_error_formatted,
+    ]
     row_labels = ["True image", "Pred image", "True error", "Pred error"]
 
     fig3, axs = plt.subplots(
@@ -149,7 +199,7 @@ def visualize(model, spec: torch.Tensor, error: torch.Tensor, spec_pred: torch.T
             if r == 0 or r == 2:
                 patch_alpha = np.kron(
                     mask_grid[c],
-                    np.ones((model.img_patch, model.img_patch), dtype=np.float32)
+                    np.ones((model.img_patch, model.img_patch), dtype=np.float32),
                 )
                 ax.imshow(
                     np.ones_like(patch_alpha),
