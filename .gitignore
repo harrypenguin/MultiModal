@@ -13,5 +13,8 @@
 # Track directories 
 !*/
 
+# Track yml files
+!*.yml
+
 # Track gitignore itself
 !.gitignore

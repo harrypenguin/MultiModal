@@ -1,0 +1,33 @@
+name: /global/cfs/cdirs/desi/users/pzehao/envs/peng
+channels:
+  - conda-forge
+dependencies:
+  - astroml
+  - git
+  - ipykernel
+  - jupyterlab
+  - matplotlib
+  - numpy=1.26.4
+  - python=3.11
+  - pytorch=2.5.1
+  - pytorch-cuda=11.8
+  - pytorch-lightning
+  - scikit-learn
+  - torchaudio=2.5.1
+  - torchvision=0.20.1
+  - umap-learn
+  - wandb
+  - pandas
+  - pyarrow
+  - zarr
+  - rich
+  - imageio
+  - seaborn
+  - peft
+  - transformers=4.53.1
+  - tokenizers=0.21.2
+  - regex=2026.4.4
+  - torchmetrics=1.3.2
+  - accelerate=0.34.2
+  - astropy=6.1.7
+prefix: /global/cfs/cdirs/desi/users/pzehao/envs/peng
