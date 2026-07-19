@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 
+
 def get_1d_sincos_pos_embed(embed_dim, seq_len, cls_token=False):
     """
     Generate 1D sine-cosine positional embeddings.
@@ -24,6 +25,7 @@ def get_1d_sincos_pos_embed(embed_dim, seq_len, cls_token=False):
 
     return pos_embed
 
+
 def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
     """
     Args:
@@ -35,18 +37,21 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
     """
     assert embed_dim % 2 == 0
     omega = np.arange(embed_dim // 2, dtype=float)
-    omega /= embed_dim / 2.
-    omega = 1. / (10000**omega)  # (D/2,)
+    omega /= embed_dim / 2.0
+    omega = 1.0 / (10000**omega)  # (D/2,)
 
     pos = pos.reshape(-1)  # (M,)
-    out = np.einsum('m,d->md', pos, omega)  # (M, D/2)
+    out = np.einsum("m,d->md", pos, omega)  # (M, D/2)
 
     emb = np.concatenate([np.sin(out), np.cos(out)], axis=1)  # (M, D)
     return emb
 
+
 def get_2d_sincos_pos_embed(embed_dim, grid_h, grid_w):
     if embed_dim % 4 != 0:
-        raise ValueError(f"embed_dim must be divisible by 4 for 2D sin-cos PE, got {embed_dim}")
+        raise ValueError(
+            f"embed_dim must be divisible by 4 for 2D sin-cos PE, got {embed_dim}"
+        )
 
     dim_each = embed_dim // 4
     omega = np.arange(dim_each, dtype=np.float32)

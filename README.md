@@ -92,6 +92,23 @@ python eval_halpha_checkpoint_sweep.py \
 ```
 
 This loads the trained model, predicts spectra at each MaNGA spaxel position, extracts H-alpha flux, and saves the resulting map as `.npy`.
+This sweep script is the reusable scientific entrypoint for H-alpha map generation; the Figure 2 workflow below just consumes its outputs.
+
+### Step 2b: Reproduce Figure 2 cleanly
+
+Use the dedicated figure workflow:
+
+```bash
+python notebooks/figure2_prepare.py \
+    --checkpoint /pscratch/sd/p/pzehao/DESIMAE/ProductionCheckpointsSimple/epoch=119-val_loss=-1.5850.ckpt \
+    --output-dir notebooks/figure2_cache
+
+python notebooks/figure2_plot.py \
+    --cache notebooks/figure2_cache/figure2_cache.pkl \
+    --output notebooks/figure2.png
+```
+
+The first command does the model/data work once and stores a compact cache. The second command is pure plotting.
 
 ### Step 3: Generate the figure
 

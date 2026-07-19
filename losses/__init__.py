@@ -1,1 +1,1 @@
-from .SpecLoss import forward_loss
+from .GaussianNLL import forward_loss

@@ -12,12 +12,15 @@ from timm.layers import (
     DropPath,
 )
 
+# Ref: https://github.com/huggingface/pytorch-image-models/, with my changes
+
 def maybe_add_mask(scores: torch.Tensor, attn_mask: Optional[torch.Tensor] = None):
     """Add attention mask to attention scores if provided."""
     if attn_mask is None:
         return scores
     attn_mask = attn_mask.to(device=scores.device, dtype=scores.dtype)
     return scores + attn_mask
+
 
 class Attention(nn.Module):
     """Standard Multi-head Self Attention module with QKV projection.
@@ -27,19 +30,20 @@ class Attention(nn.Module):
     efficiency when available, and a manual implementation otherwise. The module includes
     options for QK normalization, attention dropout, and projection dropout.
     """
+
     fused_attn: Final[bool]
 
     def __init__(
-            self,
-            dim: int,
-            num_heads: int = 8,
-            qkv_bias: bool = False,
-            qk_norm: bool = False,
-            scale_norm: bool = False,
-            proj_bias: bool = True,
-            attn_drop: float = 0.,
-            proj_drop: float = 0.,
-            norm_layer: Optional[Type[nn.Module]] = None,
+        self,
+        dim: int,
+        num_heads: int = 8,
+        qkv_bias: bool = False,
+        qk_norm: bool = False,
+        scale_norm: bool = False,
+        proj_bias: bool = True,
+        attn_drop: float = 0.0,
+        proj_drop: float = 0.0,
+        norm_layer: Optional[Type[nn.Module]] = None,
     ) -> None:
         """Initialize the Attention module.
 
@@ -54,13 +58,15 @@ class Attention(nn.Module):
             norm_layer: Normalization layer constructor for QK normalization if enabled
         """
         super().__init__()
-        assert dim % num_heads == 0, 'dim should be divisible by num_heads'
+        assert dim % num_heads == 0, "dim should be divisible by num_heads"
         if qk_norm or scale_norm:
-            assert norm_layer is not None, 'norm_layer must be provided if qk_norm or scale_norm is True'
+            assert (
+                norm_layer is not None
+            ), "norm_layer must be provided if qk_norm or scale_norm is True"
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
-        self.scale = self.head_dim ** -0.5
-        self.fused_attn = hasattr(F, 'scaled_dot_product_attention')
+        self.scale = self.head_dim**-0.5
+        self.fused_attn = hasattr(F, "scaled_dot_product_attention")
 
         self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
         self.q_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
@@ -72,21 +78,27 @@ class Attention(nn.Module):
         self.attn = None
 
     def forward(
-            self,
-            x: torch.Tensor,
-            attn_mask: Optional[torch.Tensor] = None,
+        self,
+        x: torch.Tensor,
+        attn_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         B, N, C = x.shape
-        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
+        qkv = (
+            self.qkv(x)
+            .reshape(B, N, 3, self.num_heads, self.head_dim)
+            .permute(2, 0, 3, 1, 4)
+        )
         q, k, v = qkv.unbind(0)
         q, k = self.q_norm(q), self.k_norm(k)
         attn = None
 
         if self.fused_attn:
             x = F.scaled_dot_product_attention(
-                q, k, v,
+                q,
+                k,
+                v,
                 attn_mask=attn_mask,
-                dropout_p=self.attn_drop.p if self.training else 0.,
+                dropout_p=self.attn_drop.p if self.training else 0.0,
             )
         else:
             q = q * self.scale
@@ -104,6 +116,7 @@ class Attention(nn.Module):
         x = self.proj_drop(x)
         return x, attn
 
+
 class LayerScale(nn.Module):
     """Layer scale module.
 
@@ -112,10 +125,10 @@ class LayerScale(nn.Module):
     """
 
     def __init__(
-            self,
-            dim: int,
-            init_values: float = 1e-5,
-            inplace: bool = False,
+        self,
+        dim: int,
+        init_values: float = 1e-5,
+        inplace: bool = False,
     ) -> None:
         """Initialize LayerScale module.
 
@@ -132,26 +145,27 @@ class LayerScale(nn.Module):
         """Apply layer scaling."""
         return x.mul_(self.gamma) if self.inplace else x * self.gamma
 
+
 class Block(nn.Module):
     """Transformer block with pre-normalization."""
 
     def __init__(
-            self,
-            dim: int,
-            num_heads: int,
-            mlp_ratio: float = 4.,
-            qkv_bias: bool = False,
-            qk_norm: bool = False,
-            scale_attn_norm: bool = False,
-            scale_mlp_norm: bool = False,
-            proj_bias: bool = True,
-            proj_drop: float = 0.,
-            attn_drop: float = 0.,
-            init_values: Optional[float] = None,
-            drop_path: float = 0.,
-            act_layer: Type[nn.Module] = nn.GELU,
-            norm_layer: Type[nn.Module] = LayerNorm,
-            mlp_layer: Type[nn.Module] = Mlp,
+        self,
+        dim: int,
+        num_heads: int,
+        mlp_ratio: float = 4.0,
+        qkv_bias: bool = False,
+        qk_norm: bool = False,
+        scale_attn_norm: bool = False,
+        scale_mlp_norm: bool = False,
+        proj_bias: bool = True,
+        proj_drop: float = 0.0,
+        attn_drop: float = 0.0,
+        init_values: Optional[float] = None,
+        drop_path: float = 0.0,
+        act_layer: Type[nn.Module] = nn.GELU,
+        norm_layer: Type[nn.Module] = LayerNorm,
+        mlp_layer: Type[nn.Module] = Mlp,
     ) -> None:
         """Initialize Block.
 
@@ -183,8 +197,10 @@ class Block(nn.Module):
             proj_drop=proj_drop,
             norm_layer=norm_layer,
         )
-        self.ls1 = LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
-        self.drop_path1 = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+        self.ls1 = (
+            LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
+        )
+        self.drop_path1 = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
 
         self.norm2 = norm_layer(dim)
         self.mlp = mlp_layer(
@@ -195,15 +211,24 @@ class Block(nn.Module):
             bias=proj_bias,
             drop=proj_drop,
         )
-        self.ls2 = LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
-        self.drop_path2 = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+        self.ls2 = (
+            LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
+        )
+        self.drop_path2 = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
 
-    def forward(self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None, token_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        attn_mask: Optional[torch.Tensor] = None,
+        token_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         token_mask_b = None
         if token_mask is not None:
-            token_mask_b = token_mask.to(device=x.device, dtype=torch.bool, non_blocking=True)
+            token_mask_b = token_mask.to(
+                device=x.device, dtype=torch.bool, non_blocking=True
+            )
             x = x.masked_fill(token_mask_b.unsqueeze(0).unsqueeze(-1), 0.0)
-            
+
         attn_result, _ = self.attn(self.norm1(x), attn_mask=attn_mask)
         x = x + self.drop_path1(self.ls1(attn_result))
         if token_mask_b is not None:
@@ -215,16 +240,20 @@ class Block(nn.Module):
             x = x.masked_fill(token_mask_b.unsqueeze(0).unsqueeze(-1), 0.0)
         return x
 
+
 """ Spectrum to Patch Embedding using Conv1d
 
 Modified from TIMM implementation
 """
+
+
 class PatchEmbed1D(nn.Module):
-    """ Spectrum to patch embedding.
+    """Spectrum to patch embedding.
     Returns embedded input with shape (spec_dim / patch_size, embed_dim)
     In: x.shape = (B, spec_dim, 1)
     Out: x.shape = (B, num_patches, embed_dim) (+ 1 for CLS token)
     """
+
     def __init__(self, spec_dim=7781, patch_size=16, embed_dim=16, norm_layer=None):
         super().__init__()
         self.spec_dim = spec_dim
@@ -237,17 +266,24 @@ class PatchEmbed1D(nn.Module):
 
     def forward(self, x):
         B, S, _ = x.shape
-        assert S == self.spec_dim, f"Input spectrum length ({S}) doesn't match model ({self.spec_dim})."
-        x = self.proj(x.permute(0, 2, 1)).permute(0, 2, 1) # (B, num_patches, embed_dim)
+        assert (
+            S == self.spec_dim
+        ), f"Input spectrum length ({S}) doesn't match model ({self.spec_dim})."
+        x = self.proj(x.permute(0, 2, 1)).permute(
+            0, 2, 1
+        )  # (B, num_patches, embed_dim)
         x = self.norm(x)
         return x
 
-def generate_attn_mask(patch_size: int,
-                       mask_ratio: float,
-                       seq_len: int,
-                       device=None,
-                       dtype=torch.float32,
-                       return_attn_mask: bool = True):
+
+def generate_attn_mask(
+    patch_size: int,
+    mask_ratio: float,
+    seq_len: int,
+    device=None,
+    dtype=torch.float32,
+    return_attn_mask: bool = True,
+):
     """
     Args
     ----
@@ -272,7 +308,7 @@ def generate_attn_mask(patch_size: int,
       token_mask : (L,) bool
           True for tokens that were selected for masking
     """
-    patch_size = int(patch_size)       
+    patch_size = int(patch_size)
 
     # How many contiguous bands of width = patch_size exist in this sequence
     n_bands = math.ceil(seq_len / patch_size)
@@ -287,7 +323,7 @@ def generate_attn_mask(patch_size: int,
     for b in band_ids:
         b = int(b)
         start = b * patch_size
-        end   = min((b + 1) * patch_size, seq_len)
+        end = min((b + 1) * patch_size, seq_len)
         token_mask[start:end] = True
 
     if not return_attn_mask:
@@ -296,7 +332,7 @@ def generate_attn_mask(patch_size: int,
     attn_mask_bool = token_mask.unsqueeze(0) | token_mask.unsqueeze(1)
 
     attn_mask = torch.zeros(seq_len, seq_len, dtype=dtype, device=device)
-    attn_mask[attn_mask_bool] = float('-inf')
+    attn_mask[attn_mask_bool] = float("-inf")
 
     # token_mask[0] = False
     # attn_mask[0, 0] = 0
@@ -306,4 +342,3 @@ def generate_attn_mask(patch_size: int,
     # To prevent CLS token from being masked
 
     return attn_mask, token_mask
-    

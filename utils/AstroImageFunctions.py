@@ -1,5 +1,6 @@
 import numpy as np
 
+
 def unwise_to_rgb(
     imgs, scale1=1.0, scale2=1.0, arcsinh=1.0 / 20.0, mn=-20.0, mx=10000.0, w1weight=9.0
 ):
@@ -35,7 +36,8 @@ def unwise_to_rgb(
     rgb[:, :, 1] = rgb[:, :, 0] / 2 + rgb[:, :, 2] / 2
 
     return rgb
-    
+
+
 def flux_to_rgb(imgs, bands, scales=None, m=0.02, Q=20, alpha=1.0, p=1.0):
 
     # default value for SDSS
@@ -56,7 +58,7 @@ def flux_to_rgb(imgs, bands, scales=None, m=0.02, Q=20, alpha=1.0, p=1.0):
         I = I + img
     I /= len(bands)
 
-    fI = np.arcsinh(alpha * Q * I) / np.sqrt(Q ** p)
+    fI = np.arcsinh(alpha * Q * I) / np.sqrt(Q**p)
     I += (I == 0.0) * 1e-6
     H, W = I.shape
     rgb = np.zeros((H, W, 3), np.float32)
@@ -67,6 +69,7 @@ def flux_to_rgb(imgs, bands, scales=None, m=0.02, Q=20, alpha=1.0, p=1.0):
     rgb = np.clip(rgb, 0, 1)
 
     return rgb
+
 
 def make_rgb(img, survey):
     if survey not in ["ls_grz", "unwise_w1w2", "sdss_gri"]:
