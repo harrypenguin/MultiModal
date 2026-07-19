@@ -1,33 +1,50 @@
+# Integral Field Unit Spectroscopy with One Fiber
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/license/mit)
+[![Paper](https://img.shields.io/badge/Paper-arXiv%202606.10197-b31b1b.svg)](https://arxiv.org/pdf/2606.10197)
+[![Model](https://img.shields.io/badge/Model-Hugging%20Face-ff9900.svg)](https://huggingface.co/pengzehao/MultimodalHF)
+
+Official PyTorch Lightning implementation for the paper **Integral Field Unit Spectroscopy with One Fiber**, which presents a multi-modal,
+probabilistic foundation model for galaxy images and spatially resolved spectra, pretrained on 4.7M single fiber observations. 
+
 ## Repository Structure
 
 ```
 MultiModal/
-├── models/
-│   ├── mae.py                  # Main model implementation
-│   └── mytimm.py               # Custom transformer blocks & related utils
+├── inference/
+│   └── demo.ipynb                   # Tutorial notebook for basic inference
 │
 ├── losses/
-│   └── gaussian_nll.py             # Canonical Gaussian NLL loss
+│   └── gaussian_nll.py              # Canonical Gaussian NLL loss
 │
-├── utils/
-│   ├── data_processing.py       # Dataset/dataloader objects, distributed sampling, rest-frame indexing, as well as other miscellaneous data processing helpers
-│   ├── scheduler.py            # Cosine-annealing LR with linear warmup
-│   ├── positional_embedding.py  # 1D (spectra) and 2D (images) sinusoidal positional embeddings
-│   ├── patch_embed.py           # 1D Conv1d patch embedding for spectra
-│   ├── astro_image_functions.py  # Multi-band flux to RGB conversion (Legacy Survey, WISE, SDSS)
-│   └── visualization.py        # Training/validation visualizations for W&B tracking
+├── models/
+│   ├── mae.py                       # Main model implementation
+│   └── mytimm.py                    # Custom transformer blocks & related utils
+│
+├── plot/
 │
 ├── pretrain/
 │   ├── train.py                     # Main pretraining script
-│   └── train.sh                        # SLURM batch job
+│   └── train.sh                     # SLURM batch job
 │
-└── inference/
-    ├── demo.ipynb                    # Tutorial notebook for basic inference
+├── utils/
+│   ├── data_processing.py           # Dataset/dataloader objects & data processing helpers
+│   ├── scheduler.py                 # Cosine-annealing LR with linear warmup
+│   ├── positional_embedding.py      # 1D (spectra) and 2D (images) sinusoidal positional embeddings
+│   ├── patch_embed.py               # 1D Conv1d patch embedding for spectra
+│   ├── astro_image_functions.py     # Multi-band flux to RGB conversion (Legacy Survey, WISE, SDSS)
+│   └── visualization.py             # Training/validation visualizations for W&B tracking
+│
+├── .gitignore
+├── environment.yml
+├── index.html
+├── pretrained.ckpt
+└── README.md
 ```
 
 ## Data
 
-Our model is trained with data from the Dark Energy Spectroscopic Instrument survey, Data Release 1 ([DESI DR1](https://arxiv.org/abs/2503.14745)). If you have access to NERSC, you may access these assets directly, following the paths below.
+Our model is pretrained with data from the Dark Energy Spectroscopic Instrument survey, Data Release 1 ([DESI DR1](https://arxiv.org/abs/2503.14745)). If you have access to NERSC, you may access these assets directly, following the paths below.
 
 | Asset | Path | Description |
 |-------|------|-------------|
@@ -41,7 +58,7 @@ If you are running on NERSC Perlmutter, you can use the conda environment locate
 
 ## Pretraining
 
-From `train/`, launch the batch job:
+From `pretrain/`, launch the batch job:
 
 ```bash
 sbatch train.sh
@@ -51,7 +68,7 @@ Note that one epoch takes just over an hour on the full 4-node setup. By default
 
 ## Inference
 
-`demo.py` is a tutorial notebook that demonstrates how to load the pretrained model and run inference on a small batch of DESI spectra/images. It also shows how to visualize the results.
+`demo.ipynb` is a tutorial notebook that demonstrates how to load the pretrained model and run inference on a small batch of DESI spectra/images. It also shows how to visualize the results.
 
 ## Training Configuration
 
