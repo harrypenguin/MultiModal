@@ -1,3 +1,5 @@
+"""Main multimodal masked autoencoder model."""
+
 import math
 import random
 import time
@@ -8,12 +10,12 @@ import torch
 import torch.nn as nn
 from timm.models.vision_transformer import PatchEmbed
 
-from losses.GaussianNLL import forward_loss
-from models.MyTimm import Block, generate_attn_mask, PatchEmbed1D
-from utils.DataProcessing import generate_rest_indices
-from utils.PositionalEmbedding import get_1d_sincos_pos_embed, get_2d_sincos_pos_embed
-from utils.Scheduler import CosineWarmupScheduler
-from utils.Visualization import visualize
+from losses.gaussian_nll import forward_loss
+from models.mytimm import Block, generate_attn_mask, PatchEmbed1D
+from utils.data_processing import generate_rest_indices
+from utils.positional_embedding import get_1d_sincos_pos_embed, get_2d_sincos_pos_embed
+from utils.scheduler import CosineWarmupScheduler
+from utils.visualization import visualize
 
 
 class MaskedAutoencoderViT(pl.LightningModule):

@@ -1,3 +1,5 @@
+"""Cosine learning-rate scheduler with linear warmup."""
+
 import numpy as np
 import torch
 

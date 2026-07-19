@@ -1,1 +1,3 @@
-from .GaussianNLL import forward_loss
+"""Public exports for the losses package."""
+
+from .gaussian_nll import forward_loss

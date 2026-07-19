@@ -1,11 +1,13 @@
+"""Training and validation visualization helpers for W&B logging."""
+
 import numpy as np
 import matplotlib.pyplot as plt
 import wandb
 import torch
 from pytorch_lightning.utilities.rank_zero import rank_zero_only
 
-from utils.DataProcessing import get_kernel, smooth_data
-from utils.AstroImageFunctions import make_rgb
+from utils.data_processing import get_kernel, smooth_data
+from utils.astro_image_functions import make_rgb
 
 
 def visualize(

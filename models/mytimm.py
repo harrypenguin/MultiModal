@@ -1,3 +1,5 @@
+"""Custom transformer blocks and 1D patch embedding helpers."""
+
 import math
 from typing import Optional, Type
 

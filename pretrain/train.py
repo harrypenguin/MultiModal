@@ -1,3 +1,5 @@
+"""Main multimodal pretraining entrypoint."""
+
 import os
 import sys
 
@@ -10,8 +12,8 @@ from lightning.pytorch import seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 
-from models.MAESimple import MaskedAutoencoderViT
-from utils.DataProcessing import CreateMultimodalDataLoadersIter
+from models.mae import MaskedAutoencoderViT
+from utils.data_processing import CreateMultimodalDataLoadersIter
 
 if __name__ == "__main__":
     seed_everything(130, workers=True)

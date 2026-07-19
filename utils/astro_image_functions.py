@@ -1,3 +1,5 @@
+"""Astronomical image colour-mapping helpers."""
+
 import numpy as np
 
 

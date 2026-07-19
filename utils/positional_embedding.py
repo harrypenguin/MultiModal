@@ -1,3 +1,5 @@
+"""Sinusoidal positional embedding helpers for 1D and 2D inputs."""
+
 import numpy as np
 import torch
 
